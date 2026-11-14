@@ -1,0 +1,276 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no"
+    />
+    <title>GolfPocket — Course Editor</title>
+    <!-- build_web.py flips this to "editor-only" for the hosted build, which
+         hides tools that need the game (preview). Desktop leaves it as is. -->
+    <meta name="golfpocket-host" content="editor-only" />
+    <link rel="stylesheet" href="editor.css?v=e109c3c4" />
+  </head>
+  <body>
+    <div id="editor">
+      <header class="ed-top">
+        <div class="ed-brand">GolfPocket <span>COURSE EDITOR</span></div>
+        <div class="ed-meta">
+          <label>
+            <span>COURSE NAME</span>
+            <input id="courseName" type="text" value="My Course" />
+          </label>
+          <label>
+            <span>ID</span>
+            <input id="courseId" type="text" value="my-course" />
+          </label>
+        </div>
+        <div class="ed-actions">
+          <button id="undoBtn" class="small">UNDO</button>
+          <button id="redoBtn" class="small">REDO</button>
+          <button id="newBtn" class="small">NEW COURSE</button>
+          <button id="setupBtn" class="small">SETUP</button>
+          <button id="saveFileBtn" class="small">SAVE FILE</button>
+          <button id="saveBtn" class="small">SAVE</button>
+          <button id="loadBtn" class="small">OPEN</button>
+          <button id="importBtn" class="small">IMPORT</button>
+          <input id="importFile" type="file" accept=".glfppart,.glfpkt,.json,application/json,application/x-golfpocket-part,application/x-golfpocket-course" hidden />
+          <input id="referenceFile" type="file" accept="image/png,image/jpeg,image/webp,image/gif" hidden />
+          <button id="analyseBtn" class="small">ANALYSE</button>
+          <button id="previewBtn" class="small">PREVIEW</button>
+          <button id="exportBtn" class="primary small">EXPORT COURSE</button>
+          <div class="ed-uiscale" title="Editor text and icon size">
+            <button id="uiScaleDown" class="small" type="button" aria-label="Smaller interface">A−</button>
+            <span id="uiScaleLabel">100%</span>
+            <button id="uiScaleUp" class="small" type="button" aria-label="Larger interface">A+</button>
+          </div>
+        </div>
+      </header>
+
+      <aside class="ed-tools" id="toolbar">
+        <button class="tool on" data-tool="pan" title="Pan and zoom — hold WASD or the arrow keys to pan">✥<span>PAN</span></button>
+        <button class="tool" data-tool="fairway" title="Draw the fairway centreline">〰<span>FAIRWAY</span></button>
+        <button class="tool" data-tool="tee" title="Place the tee">T<span>TEE</span></button>
+        <button class="tool" data-tool="green" title="Place the green">●<span>GREEN</span></button>
+        <button class="tool" data-tool="pin" title="Place the pin">⚑<span>PIN</span></button>
+        <button class="tool" data-tool="pond" title="Paint water">≈<span>POND</span></button>
+        <button class="tool" data-tool="ocean" title="Paint ocean">🌊<span>OCEAN</span></button>
+        <button class="tool" data-tool="bunker" title="Paint sand">◌<span>BUNKER</span></button>
+        <button class="tool" data-tool="tree" title="Place a tree">♣<span>TREE</span></button>
+        <button class="tool" data-tool="prop" title="Place a building">⌂<span>BUILDING</span></button>
+        <button class="tool" data-tool="road" title="Draw a road or path">═<span>ROAD</span></button>
+        <button class="tool" data-tool="flowers" title="Place a flower bed">✿<span>FLOWERS</span></button>
+        <button class="tool" data-tool="reference" title="Trace a reference image">🖼<span>REFERENCE</span></button>
+        <button class="tool" data-tool="deer" title="Deer spawn zone">🦌<span>DEER</span></button>
+        <button class="tool" data-tool="rabbit" title="Rabbit warren at a tree">🐇<span>RABBIT</span></button>
+        <button class="tool" data-tool="squirrel" title="Squirrel marker">🐿<span>SQUIRREL</span></button>
+        <button class="tool" data-tool="duck" title="Mark a duck pond">🦆<span>DUCK</span></button>
+        <button class="tool" data-tool="kangaroo" title="Kangaroo mob">🦘<span>KANGAROO</span></button>
+        <button class="tool" data-tool="galah" title="Galah flock">🦜<span>GALAH</span></button>
+        <button class="tool" data-tool="emu" title="Emu group">🪶<span>EMU</span></button>
+        <button class="tool" data-tool="seal" title="Seal colony">🦭<span>SEAL</span></button>
+        <button class="tool" data-tool="penguin" title="Penguin colony">🐧<span>PENGUIN</span></button>
+        <button class="tool" data-tool="target" title="Place a bonus target">◎<span>TARGET</span></button>
+        <button class="tool" data-tool="route" title="Draw a winding cart route">⤳<span>CART ROUTE</span></button>
+        <button class="tool" data-tool="erase" title="Erase trees and markers">⌫<span>ERASE</span></button>
+      </aside>
+
+      <main class="ed-main">
+        <canvas id="edCanvas"></canvas>
+        <div class="ed-cursor-hint" id="cursorHint"></div>
+        <div id="mapSelectBar" class="ed-map-select hidden">
+          <span>DRAG A BOX AROUND THE COURSE FOR THE ROUND PICTURE</span>
+          <button id="mapSelectConfirm" class="small primary" type="button" disabled>USE THIS AREA</button>
+          <button id="mapSelectCancel" class="small" type="button">CANCEL</button>
+        </div>
+        <div class="ed-bottom">
+          <div class="ed-holes">
+            <span class="ed-label">HOLES</span>
+            <div id="holeTabs"></div>
+            <button id="addHoleBtn" class="small">+ HOLE</button>
+          </div>
+          <div class="ed-zoom">
+            <button id="zoomOutBtn" class="small">−</button>
+            <button id="zoomInBtn" class="small">+</button>
+            <button id="fitBtn" class="small">FIT</button>
+          </div>
+          <div id="status" class="ed-status"></div>
+        </div>
+      </main>
+
+      <aside class="ed-inspector">
+        <h2 id="toolTitle">PAN</h2>
+        <p id="toolHelp" class="ed-help"></p>
+        <div id="toolSettings" class="ed-settings"></div>
+        <div class="ed-size-guide">
+          <div class="ed-size-guide-head">
+            <span>SIZE GUIDE</span>
+            <b id="sizeGuideLabel"></b>
+          </div>
+          <canvas id="sizeGuideCanvas" width="300" height="118"></canvas>
+        </div>
+        <div class="ed-divider"></div>
+        <div id="courseSummary" class="ed-course-summary"></div>
+        <div class="ed-hole-fields">
+          <label><span>HOLE NAME</span><input id="holeName" type="text" /></label>
+          <label><span>PAR</span><input id="holePar" type="number" min="1" max="99" /></label>
+        </div>
+        <div id="holeStats" class="ed-stats"></div>
+        <div class="ed-divider"></div>
+        <div class="ed-section-head">
+          <h3>CHALLENGES</h3>
+          <span id="challengeCountLabel" class="ed-section-badge"></span>
+        </div>
+        <div id="challengeList" class="ed-challenge-list"></div>
+        <div class="ed-divider"></div>
+        <div class="ed-section-head">
+          <h3>BONUS TARGETS</h3>
+          <button id="clearTargetsBtn" class="small" type="button">CLEAR</button>
+        </div>
+        <div id="targetList" class="ed-target-list"></div>
+        <div class="ed-divider"></div>
+        <div class="ed-section-head">
+          <h3>VALIDATION</h3>
+          <span id="validationBadge" class="ed-validation-badge"></span>
+        </div>
+        <div id="validationList" class="ed-validation"></div>
+        <div class="ed-danger">
+          <button id="clearWaterBtn" class="small">CLEAR WATER</button>
+          <button id="clearSandBtn" class="small">CLEAR SAND</button>
+          <button id="clearTreesBtn" class="small">CLEAR TREES</button>
+          <button id="clearSceneryBtn" class="small">CLEAR SCENERY</button>
+          <button id="clearRouteBtn" class="small">CLEAR ROUTES</button>
+          <button id="deleteHoleBtn" class="small danger">DELETE HOLE</button>
+        </div>
+        <div id="routeActions" class="ed-route-actions"></div>
+      </aside>
+    </div>
+
+    <div id="previewOverlay" class="ed-preview hidden">
+      <div class="ed-preview-bar">
+        <div class="ed-preview-title">COURSE PREVIEW <span id="previewTitleHole">HOLE 1 · UNSAVED</span></div>
+        <div class="ed-preview-actions">
+          <button id="previewReloadBtn" class="small">RELOAD</button>
+          <button id="previewTabBtn" class="small">OPEN TAB</button>
+          <button id="previewCloseBtn" class="small">CLOSE</button>
+        </div>
+      </div>
+      <div class="ed-preview-stage">
+        <iframe id="previewFrame" title="GolfPocket course preview"></iframe>
+      </div>
+    </div>
+    <div id="courseDialog" class="ed-dialog-backdrop hidden">
+      <form id="courseForm" class="ed-dialog">
+        <p class="ed-dialog-eyebrow" id="courseDialogMode">NEW COURSE</p>
+        <h2 id="courseDialogTitle">Build a full course</h2>
+        <p class="ed-dialog-help" id="courseDialogHelp">
+          Choose how many holes the course has. Every hole stays tied to this
+          course ID and exports as one JSON file.
+        </p>
+        <label class="ed-dialog-field">
+          <span>COURSE NAME</span>
+          <input id="setupName" type="text" value="My Course" autocomplete="off" />
+        </label>
+        <label class="ed-dialog-field">
+          <span>COURSE ID</span>
+          <input id="setupId" type="text" value="my-course" autocomplete="off" />
+        </label>
+        <div class="ed-dialog-field">
+          <span>HOLES</span>
+          <div id="setupCounts" class="ed-counts"></div>
+        </div>
+        <label class="ed-dialog-field">
+          <span>COURSE THEME</span>
+          <select id="setupEnvironment">
+            <option value="canadian">Canadian</option>
+            <option value="australian">Australian</option>
+            <option value="coastal">Coastal</option>
+            <option value="all">All Themes</option>
+          </select>
+        </label>
+        <p id="setupNote" class="ed-dialog-note"></p>
+        <div class="ed-dialog-actions">
+          <button id="courseCancelBtn" type="button" class="small">CANCEL</button>
+          <button id="courseConfirmBtn" type="submit" class="primary small">
+            CREATE COURSE
+          </button>
+        </div>
+      </form>
+    </div>
+    <div id="analysisDialog" class="ed-dialog-backdrop hidden">
+      <div class="ed-dialog ed-analysis-dialog">
+        <p class="ed-dialog-eyebrow">COURSE ANALYSIS</p>
+        <h2>Rating &amp; par audit</h2>
+        <p class="ed-dialog-help">
+          Runs all 12 NPCs over this course headless, then checks each hole's
+          par against their simulated scores and the course's hazards.
+        </p>
+        <div id="analysisSummary" class="ed-analysis-summary"></div>
+        <div id="analysisHoles" class="ed-analysis-holes"></div>
+        <div id="analysisNpcs" class="ed-analysis-npcs"></div>
+        <p id="analysisNote" class="ed-dialog-note"></p>
+        <div class="ed-dialog-actions">
+          <button id="analysisCloseBtn" type="button" class="small">CLOSE</button>
+          <button id="analysisReanalyseBtn" type="button" class="small">RE-ANALYSE</button>
+          <button id="analysisApplyBtn" type="button" class="primary small">APPLY SUGGESTED PARS</button>
+        </div>
+      </div>
+    </div>
+    <div id="libraryDialog" class="ed-dialog-backdrop hidden">
+      <div class="ed-dialog ed-library-dialog">
+        <p class="ed-dialog-eyebrow">LOCAL COURSES</p>
+        <h2>Saved courses</h2>
+        <p class="ed-dialog-help">
+          Saves stay in this browser so you can close the editor and come back to
+          a half-finished course. <b>SAVE FILE</b> writes the same work to a
+          <code>.glfppart</code> you can keep anywhere, and <b>OPEN</b> resumes it.
+        </p>
+        <div id="savedCourseList" class="ed-saved-list"></div>
+        <div class="ed-dialog-actions">
+          <button id="libraryCloseBtn" type="button" class="small">CLOSE</button>
+        </div>
+      </div>
+    </div>
+    <div id="publishDialog" class="ed-dialog-backdrop hidden">
+      <div class="ed-dialog ed-publish-dialog">
+        <p class="ed-dialog-eyebrow">COURSE READY</p>
+        <h2>Export <span id="publishFileName">course.glfpkt</span></h2>
+        <p class="ed-dialog-help">
+          Download one self-contained file and send it to anyone. They import it
+          from the game’s Settings screen — no server, no manifest.
+        </p>
+        <div class="ed-settings ed-publish-settings">
+          <label class="ed-setting">
+            <span class="ed-set-head">SHOP SUMMARY</span>
+            <input id="publishSummary" type="text" maxlength="140" placeholder="A short description shown in the course list" />
+          </label>
+          <label class="ed-setting">
+            <span class="ed-set-head">UNLOCK</span>
+            <select id="publishUnlockMode">
+              <option value="starter">Starter — always unlocked</option>
+              <option value="after">Complete another course</option>
+              <option value="trophies">Trophies only — early unlock</option>
+            </select>
+          </label>
+          <label class="ed-setting" id="publishAfterField">
+            <span class="ed-set-head">UNLOCK AFTER</span>
+            <input id="publishAfter" type="text" list="publishCourseIds" placeholder="previous-course-id" />
+            <datalist id="publishCourseIds"></datalist>
+          </label>
+          <label class="ed-setting" id="publishTrophiesField">
+            <span class="ed-set-head">EARLY UNLOCK TROPHIES</span>
+            <input id="publishTrophies" type="number" min="0" max="99" value="0" />
+          </label>
+        </div>
+        <pre id="publishManifest" class="ed-publish-code"></pre>
+        <p id="publishCopyStatus" class="ed-publish-status"></p>
+        <div class="ed-dialog-actions">
+          <button id="publishCloseBtn" type="button" class="small">DONE</button>
+          <button id="publishDownloadBtn" type="button" class="primary small">DOWNLOAD .GLFPKT</button>
+        </div>
+      </div>
+    </div>
+    <script type="module" src="js/editor.js?v=e109c3c4"></script>
+  </body>
+</html>
