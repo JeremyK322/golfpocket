@@ -821,9 +821,10 @@ button:disabled {
   justify-content: center;
   padding: calc(12px * var(--ui));
 }
-#previewFrame {
+#previewCanvas {
   width: min(calc(430px * var(--ui)), 100%);
   height: min(calc(880px * var(--ui)), 100%);
+  display: block;
   border: 1px solid rgba(253, 246, 227, 0.22);
   border-radius: calc(20px * var(--ui));
   background: #1c4f2c;

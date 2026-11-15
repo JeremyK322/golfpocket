@@ -7,10 +7,7 @@
       content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no"
     />
     <title>GolfPocket — Course Editor</title>
-    <!-- build_web.py flips this to "editor-only" for the hosted build, which
-         hides tools that need the game (preview). Desktop leaves it as is. -->
-    <meta name="golfpocket-host" content="editor-only" />
-    <link rel="stylesheet" href="editor.css?v=e109c3c4" />
+    <link rel="stylesheet" href="editor.css?v=e61ece37" />
   </head>
   <body>
     <div id="editor">
@@ -149,15 +146,14 @@
 
     <div id="previewOverlay" class="ed-preview hidden">
       <div class="ed-preview-bar">
-        <div class="ed-preview-title">COURSE PREVIEW <span id="previewTitleHole">HOLE 1 · UNSAVED</span></div>
+        <div class="ed-preview-title">COURSE PREVIEW <span id="previewTitleHole">HOLE 1 · AS PLAYED</span></div>
         <div class="ed-preview-actions">
           <button id="previewReloadBtn" class="small">RELOAD</button>
-          <button id="previewTabBtn" class="small">OPEN TAB</button>
           <button id="previewCloseBtn" class="small">CLOSE</button>
         </div>
       </div>
       <div class="ed-preview-stage">
-        <iframe id="previewFrame" title="GolfPocket course preview"></iframe>
+        <canvas id="previewCanvas"></canvas>
       </div>
     </div>
     <div id="courseDialog" class="ed-dialog-backdrop hidden">
@@ -271,6 +267,6 @@
         </div>
       </div>
     </div>
-    <script type="module" src="js/editor.js?v=e109c3c4"></script>
+    <script type="module" src="js/editor.js?v=e61ece37"></script>
   </body>
 </html>
