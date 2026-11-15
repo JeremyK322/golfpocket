@@ -323,7 +323,17 @@ button:disabled {
   align-items: center;
   gap: calc(6px * var(--ui));
   min-width: 0;
-  overflow: hidden;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+  -webkit-overflow-scrolling: touch;
+}
+.ed-holes::-webkit-scrollbar {
+  display: none;
+}
+.hole-tab {
+  flex: 0 0 auto;
 }
 .ed-label {
   font-size: calc(10px * var(--ui));
@@ -1432,4 +1442,35 @@ button:disabled {
   font-size: calc(10px * var(--ui));
   font-weight: 850;
   letter-spacing: 0.06em;
+}
+
+/* ---------------------------------------------------------------- touch */
+/* Tablets and other coarse pointers: bigger targets, no iOS field zoom. */
+@media (pointer: coarse) {
+  button.small {
+    height: calc(40px * var(--ui));
+    padding: 0 calc(12px * var(--ui));
+  }
+  .tool {
+    min-height: calc(56px * var(--ui));
+  }
+  .hole-tab {
+    height: calc(36px * var(--ui));
+    padding: 0 calc(12px * var(--ui));
+  }
+  .ed-meta input {
+    height: calc(40px * var(--ui));
+  }
+  .ed-setting input[type="range"] {
+    height: calc(30px * var(--ui));
+  }
+  /* iOS Safari zooms the page when a focused field renders below 16px. */
+  #editor input,
+  #editor select,
+  #editor textarea,
+  .ed-dialog input,
+  .ed-dialog select,
+  .ed-dialog textarea {
+    font-size: max(16px, calc(11px * var(--ui)));
+  }
 }
