@@ -1,6 +1,6 @@
 // GolfPocket course editor. A standalone desktop/tablet tool that edits the
 // same JSON schema the game loads from courses/*.json.
-import * as C from "./course.js?v=e61ece37";
+import * as C from "./course.js?v=c20301f3";
 import {
   clamp,
   closedSplinePoints,
@@ -23,10 +23,10 @@ import {
   drawProp,
   drawRoad,
   drawFlowerBed,
-} from "./scenery.js?v=e61ece37";
-import { analyseCourse } from "./stableford.js?v=e61ece37";
-import * as Store from "./editorStore.js?v=e61ece37";
-import { startHolePreview } from "./holePreview.js?v=e61ece37";
+} from "./scenery.js?v=c20301f3";
+import { analyseCourse } from "./stableford.js?v=c20301f3";
+import * as Store from "./editorStore.js?v=c20301f3";
+import { startHolePreview } from "./holePreview.js?v=c20301f3";
 
 const WORLD = C.BASE_WORLD;
 const CELL = 4;
@@ -308,6 +308,8 @@ const state = {
   vh: 600,
   dpr: 1,
   dirty: false,
+  // Touch input gets a larger pick radius than a mouse pointer.
+  hitScale: 1,
   partCreatedAt: null,
   uiScale: 1,
   // Authored metadata that travels inside the file (part or package).
@@ -3147,7 +3149,7 @@ function eraseAt(p, options = {}) {
     area = Infinity,
     priority = 2
   ) => {
-    if (distance > limit) return;
+    if (distance > limit * state.hitScale) return;
     const better =
       !best ||
       priority < best.priority ||
@@ -3754,7 +3756,7 @@ function referenceHitTest(p) {
   const local = referenceLocalPoint(p);
   const hw = ref.w / 2;
   const hh = ref.h / 2;
-  const handleR = Math.max(7, 12 / state.zoom);
+  const handleR = Math.max(7, (12 * state.hitScale) / state.zoom);
   const corners = [
     { x: -hw, y: -hh, sx: -1, sy: -1 },
     { x: hw, y: -hh, sx: 1, sy: -1 },
@@ -4567,12 +4569,130 @@ function pointerPosition(event) {
   return { sx, sy, world: s2w(sx, sy) };
 }
 
+// The second click/tap of a double action adds a duplicate point before the
+// draft is finished, so drop it first.
+function finishDraftFromDoubleTap() {
+  if (state.tool === "fairway") {
+    if (state.fairwayDraft && state.fairwayDraft.length > 1) state.fairwayDraft.pop();
+    finishFairway();
+  } else if (state.tool === "route") {
+    if (state.routeDraft && state.routeDraft.length > 1) state.routeDraft.pop();
+    finishRoute();
+  } else if (state.tool === "road") {
+    if (state.roadDraft && state.roadDraft.length > 1) state.roadDraft.pop();
+    finishRoad();
+  }
+}
+
+// ---------------------------------------------------------------- pointers
+// Track every pointer so two fingers can pinch and pan without the second
+// finger being interpreted as a new draw or placement.
+const activePointers = new Map();
+let pinchGesture = null;
+let gestureLatch = false;
+let lastTap = null;
+
+function trackPointer(event) {
+  const rect = canvas.getBoundingClientRect();
+  const record = {
+    id: event.pointerId,
+    x: event.clientX,
+    y: event.clientY,
+    startX: event.clientX,
+    startY: event.clientY,
+    sx: event.clientX - rect.left,
+    sy: event.clientY - rect.top,
+    time: performance.now(),
+    moved: false,
+    touch: event.pointerType === "touch",
+    historyBefore: historyIndex,
+  };
+  activePointers.set(event.pointerId, record);
+  return record;
+}
+
+function pinchPoints() {
+  const points = [...activePointers.values()];
+  return { a: points[0], b: points[1] };
+}
+
+function beginGesture() {
+  const { a, b } = pinchPoints();
+  if (!a || !b) return;
+  gestureLatch = true;
+  state.drag = null;
+  if (state.stroke) finishBrush();
+  // A stray placement from the first finger is undone when the pinch starts
+  // immediately, so two-finger gestures never leave a tee or a bush behind.
+  const settled = !a.moved && !b.moved;
+  const young = performance.now() - Math.min(a.time, b.time) < 240;
+  const leader = a.time <= b.time ? a : b;
+  if (settled && young && historyIndex !== leader.historyBefore) undo();
+  pinchGesture = {
+    lastDist: Math.max(1, Math.hypot(b.x - a.x, b.y - a.y)),
+    lastMidX: (a.x + b.x) / 2,
+    lastMidY: (a.y + b.y) / 2,
+  };
+  canvas.style.cursor = "grabbing";
+}
+
+function updateGesture() {
+  const { a, b } = pinchPoints();
+  if (!a || !b || !pinchGesture) return;
+  const rect = canvas.getBoundingClientRect();
+  const dist = Math.max(1, Math.hypot(b.x - a.x, b.y - a.y));
+  const midX = (a.x + b.x) / 2;
+  const midY = (a.y + b.y) / 2;
+
+  const factor = dist / pinchGesture.lastDist;
+  if (Math.abs(factor - 1) > 0.002) {
+    zoomAt(midX - rect.left, midY - rect.top, factor);
+    state.fitted = true;
+  }
+  const dx = midX - pinchGesture.lastMidX;
+  const dy = midY - pinchGesture.lastMidY;
+  if (dx || dy) {
+    state.panX += dx;
+    state.panY += dy;
+  }
+  pinchGesture.lastDist = dist;
+  pinchGesture.lastMidX = midX;
+  pinchGesture.lastMidY = midY;
+  requestRender();
+}
+
+function rebaseGesture() {
+  const { a, b } = pinchPoints();
+  if (!a || !b) {
+    pinchGesture = null;
+    return;
+  }
+  pinchGesture = {
+    lastDist: Math.max(1, Math.hypot(b.x - a.x, b.y - a.y)),
+    lastMidX: (a.x + b.x) / 2,
+    lastMidY: (a.y + b.y) / 2,
+  };
+}
+
 function onPointerDown(event) {
   if (event.button !== 0 && event.pointerType === "mouse") return;
+  const record = trackPointer(event);
+  try {
+    canvas.setPointerCapture?.(event.pointerId);
+  } catch (err) {
+    // Some touch stacks reject capture for synthetic or cancelled pointers.
+  }
+
+  if (activePointers.size >= 2) {
+    beginGesture();
+    return;
+  }
+  if (gestureLatch) return;
+
+  state.hitScale = record.touch ? 1.7 : 1;
   const pos = pointerPosition(event);
   const p = pos.world;
   state.pointer = p;
-  canvas.setPointerCapture?.(event.pointerId);
 
   if (state.mapSelect) {
     state.mapSelect.dragging = true;
@@ -4774,6 +4894,22 @@ function onPointerDown(event) {
 }
 
 function onPointerMove(event) {
+  const record = activePointers.get(event.pointerId);
+  if (record) {
+    record.x = event.clientX;
+    record.y = event.clientY;
+    if (
+      !record.moved &&
+      Math.hypot(event.clientX - record.startX, event.clientY - record.startY) > 8
+    ) {
+      record.moved = true;
+    }
+  }
+  if (gestureLatch) {
+    if (activePointers.size >= 2) updateGesture();
+    return;
+  }
+
   const pos = pointerPosition(event);
   const p = pos.world;
   state.pointer = p;
@@ -4879,7 +5015,49 @@ function onPointerMove(event) {
   updateHint();
 }
 
-function onPointerUp() {
+function onPointerUp(event) {
+  const record = event ? activePointers.get(event.pointerId) : null;
+  if (event) activePointers.delete(event.pointerId);
+
+  if (gestureLatch) {
+    if (activePointers.size >= 2) rebaseGesture();
+    else if (activePointers.size === 1) pinchGesture = null;
+    else {
+      gestureLatch = false;
+      pinchGesture = null;
+      state.drag = null;
+      state.pointer = null;
+      lastTap = null;
+      canvas.style.cursor = state.tool === "pan" ? "grab" : "crosshair";
+      requestRender();
+    }
+    return;
+  }
+
+  // A quick double tap finishes multi-point drafts on touch screens, where
+  // dblclick is not guaranteed to fire.
+  if (
+    record &&
+    record.touch &&
+    !record.moved &&
+    performance.now() - record.time < 420 &&
+    ["fairway", "route", "road"].includes(state.tool)
+  ) {
+    const now = performance.now();
+    if (
+      lastTap &&
+      now - lastTap.time < 340 &&
+      Math.hypot(event.clientX - lastTap.x, event.clientY - lastTap.y) < 28
+    ) {
+      lastTap = null;
+      finishDraftFromDoubleTap();
+      return;
+    }
+    lastTap = { time: now, x: event.clientX, y: event.clientY };
+  } else if (record && !record.touch) {
+    lastTap = null;
+  }
+
   if (state.mapSelect?.dragging) {
     state.mapSelect.dragging = false;
     const a = state.mapSelect.start;
@@ -6216,21 +6394,18 @@ function showPreview() {
     previewCanvas.width = 0;
     previewCanvas.height = 0;
     setStatus(`Rendering hole ${index + 1}…`);
-    // Let the overlay paint first, then do the expensive course paint.
-    requestAnimationFrame(() => {
-      try {
-        previewSession = startHolePreview(previewCanvas, {
-          hole: { ...cut, index: index + 1 },
-          theme: state.course.theme || "verdant",
-          environment: state.course.environment || "canadian",
-        });
-        setStatus(`Previewing hole ${index + 1} — ${state.course.theme || "verdant"} theme`);
-      } catch (err) {
-        console.error(err);
-        setStatus(`Preview failed: ${err.message}`, "error");
-        hidePreview();
-      }
-    });
+    try {
+      previewSession = startHolePreview(previewCanvas, {
+        hole: { ...cut, index: index + 1 },
+        theme: state.course.theme || "verdant",
+        environment: state.course.environment || "canadian",
+      });
+      setStatus(`Previewing hole ${index + 1} — ${state.course.theme || "verdant"} theme`);
+    } catch (err) {
+      console.error(err);
+      setStatus(`Preview failed: ${err.message}`, "error");
+      hidePreview();
+    }
   } catch (err) {
     console.error(err);
     setStatus(`Preview failed: ${err.message}`, "error");
@@ -6549,25 +6724,11 @@ canvas.addEventListener(
   { passive: false }
 );
 canvas.addEventListener("dblclick", () => {
-  if (state.tool === "fairway") {
-    if (state.fairwayDraft && state.fairwayDraft.length > 1) {
-      // The double-click's second pointerdown added a duplicate point.
-      state.fairwayDraft.pop();
-    }
-    finishFairway();
-  }
-  if (state.tool === "route") {
-    if (state.routeDraft && state.routeDraft.length > 1) {
-      state.routeDraft.pop();
-    }
-    finishRoute();
-  }
-  if (state.tool === "road") {
-    if (state.roadDraft && state.roadDraft.length > 1) {
-      state.roadDraft.pop();
-    }
-    finishRoad();
-  }
+  finishDraftFromDoubleTap();
+});
+canvas.addEventListener("contextmenu", (event) => {
+  // Long-press on a touch screen must not open the browser menu mid-draw.
+  event.preventDefault();
 });
 
 document.addEventListener("keydown", (event) => {
@@ -6646,6 +6807,12 @@ document.addEventListener("keyup", (event) => {
 window.addEventListener("blur", () => {
   panKeys.clear();
   stopKeyboardPan();
+  // A lost pointerup must not leave the canvas stuck in gesture mode.
+  activePointers.clear();
+  gestureLatch = false;
+  pinchGesture = null;
+  state.drag = null;
+  lastTap = null;
 });
 
 undoBtn.addEventListener("click", undo);
@@ -6848,6 +7015,7 @@ analysisDialog.addEventListener("click", (event) => {
 });
 
 window.addEventListener("resize", resize);
+window.addEventListener("orientationchange", () => setTimeout(resize, 150));
 
 // ---------------------------------------------------------------- boot
 document.addEventListener("visibilitychange", () => {

@@ -7,10 +7,10 @@ import {
   loadCourseData,
   setHole,
   WORLD,
-} from "./course.js?v=e61ece37";
-import { paintCourse } from "./paint.js?v=e61ece37";
-import { ShoreWaves } from "./waves.js?v=e61ece37";
-import { drawFlag, drawTree } from "./holeArt.js?v=e61ece37";
+} from "./course.js?v=c20301f3";
+import { paintCourse } from "./paint.js?v=c20301f3";
+import { ShoreWaves } from "./waves.js?v=c20301f3";
+import { drawFlag, drawTree } from "./holeArt.js?v=c20301f3";
 
 const MIN_FRAME_MS = 1000 / 30;
 
@@ -76,17 +76,7 @@ export function startHolePreview(canvas, { hole, theme = "verdant", environment 
     canvas.height = Math.round(boxH * dpr);
   }
 
-  function frame(now) {
-    if (stopped) return;
-    if (!started) started = now;
-    // Cap the work on slow machines rather than dropping frames forever.
-    if (now - last < MIN_FRAME_MS) {
-      raf = requestAnimationFrame(frame);
-      return;
-    }
-    last = now;
-    const time = (now - started) / 1000;
-
+  function draw(time) {
     layout();
     const dpr = Math.min(2, window.devicePixelRatio || 1);
     const scale = boxW / WORLD.w;
@@ -110,10 +100,24 @@ export function startHolePreview(canvas, { hole, theme = "verdant", environment 
       // Water is decoration; never let it break the preview.
     }
     ctx.restore();
+  }
 
+  function frame(now) {
+    if (stopped) return;
+    if (!started) started = now;
+    // Cap the work on slow machines rather than dropping frames forever.
+    if (now - last < MIN_FRAME_MS) {
+      raf = requestAnimationFrame(frame);
+      return;
+    }
+    last = now;
+    draw((now - started) / 1000);
     raf = requestAnimationFrame(frame);
   }
 
+  // Paint one frame immediately: a background tab pauses rAF, and the preview
+  // should still show the hole the moment it opens.
+  draw(0);
   raf = requestAnimationFrame(frame);
 
   return {

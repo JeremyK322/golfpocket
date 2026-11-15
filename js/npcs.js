@@ -6,7 +6,7 @@ import {
   HAT_COLOUR_BY_ID,
   SHIRT_COLOUR_BY_ID,
   SHORTS_COLOUR_BY_ID,
-} from "./catalog.js?v=e61ece37";
+} from "./catalog.js?v=c20301f3";
 import { clamp, mulberry32 } from "./util.js";
 
 export const NPC_PROFILES = [  {

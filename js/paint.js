@@ -11,8 +11,8 @@ import {
   PAINT_SEED,
   PX_PER_METRE,
   surfaceAt,
-} from "./course.js?v=e61ece37";
-import { drawScenery } from "./scenery.js?v=e61ece37";
+} from "./course.js?v=c20301f3";
+import { drawScenery } from "./scenery.js?v=c20301f3";
 import { circleUnionPath, mulberry32, pointInPoly, rr, TAU } from "./util.js";
 
 function makeNoiseTile(rng, size, colors, count) {

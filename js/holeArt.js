@@ -1,6 +1,6 @@
 // Tree sprites and the pin flag, shared by the game and the editor preview so
 // the two renderings can never drift apart.
-import { makeTreeCanvas } from "./scenery.js?v=e61ece37";
+import { makeTreeCanvas } from "./scenery.js?v=c20301f3";
 import { TAU } from "./util.js";
 
 // Trees share a small, bounded sprite cache. Keying by species/size/variant
