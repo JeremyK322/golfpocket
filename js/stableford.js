@@ -4,7 +4,7 @@
 // ANALYSE runs every NPC over the course 200 times with headless gross scores.
 // Those rounds produce each NPC's handicap, the course rating/slope and the
 // suggested par for every hole. There are no fixed par targets or clamps.
-import { NPC_PROFILES, npcHandicapIndex } from "./npcs.js?v=e109c3c4";
+import { NPC_PROFILES, npcHandicapIndex } from "./npcs.js?v=e61ece37";
 import { approxNormal, clamp, mulberry32 } from "./util.js";
 
 export const PX_PER_METRE = 3.94;

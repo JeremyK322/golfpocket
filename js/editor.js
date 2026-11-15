@@ -1,6 +1,6 @@
 // GolfPocket course editor. A standalone desktop/tablet tool that edits the
 // same JSON schema the game loads from courses/*.json.
-import * as C from "./course.js?v=e109c3c4";
+import * as C from "./course.js?v=e61ece37";
 import {
   clamp,
   closedSplinePoints,
@@ -23,14 +23,14 @@ import {
   drawProp,
   drawRoad,
   drawFlowerBed,
-} from "./scenery.js?v=e109c3c4";
-import { analyseCourse } from "./stableford.js?v=e109c3c4";
-import * as Store from "./editorStore.js?v=e109c3c4";
+} from "./scenery.js?v=e61ece37";
+import { analyseCourse } from "./stableford.js?v=e61ece37";
+import * as Store from "./editorStore.js?v=e61ece37";
+import { startHolePreview } from "./holePreview.js?v=e61ece37";
 
 const WORLD = C.BASE_WORLD;
 const CELL = 4;
 const CART_CLEARANCE = 44;
-const DRAFT_KEY = "golfpocket.draftCourse";
 const LIBRARY_KEY = "golfpocket.editorLibrary.v1";
 const MIN_ZOOM = 0.04;
 const MAX_ZOOM = 3;
@@ -44,12 +44,6 @@ const AUTOSAVE_KEY = "autosave";
 const PART_HANDLE_KEY = "partFileHandle";
 const UI_SCALE_KEY = "uiScale";
 const UI_SCALE_STEPS = [0.85, 1, 1.15, 1.3, 1.5, 1.75];
-// build_web.py marks the hosted build "editor-only": the game is not deployed
-// there, so anything that loads it is removed instead of failing at runtime.
-const PREVIEW_ENABLED =
-  (document.querySelector('meta[name="golfpocket-host"]')?.content || "desktop") !==
-  "editor-only";
-
 const EXPORT_WIDTH = 1700;
 const EXPORT_MIN_HEIGHT = 2350;
 const EXPORT_PADDING = 240;
@@ -266,14 +260,9 @@ const courseConfirmBtn = $("courseConfirmBtn");
 const undoBtn = $("undoBtn");
 const redoBtn = $("redoBtn");
 const previewOverlay = $("previewOverlay");
-const previewFrame = $("previewFrame");
+const previewCanvas = $("previewCanvas");
 const previewTitleHole = $("previewTitleHole");
 const uiScaleLabel = $("uiScaleLabel");
-// Hosted editor: remove the preview affordances entirely.
-if (!PREVIEW_ENABLED) {
-  $("previewBtn")?.remove();
-  previewOverlay?.remove();
-}
 const libraryDialog = $("libraryDialog");
 const savedCourseList = $("savedCourseList");
 const publishDialog = $("publishDialog");
@@ -6186,8 +6175,8 @@ function closePublishDialog() {
 }
 
 // ---------------------------------------------------------------- preview
-// Preview works on the current hole alone, so a course can be play-tested
-// while the other 17 holes are still empty.
+// Preview works on the current hole alone, so a course can be inspected while
+// the other 17 holes are still empty.
 function previewBlocker(hole) {
   const number = state.holeIndex + 1;
   if (!hole) return "There is no hole to preview.";
@@ -6199,59 +6188,49 @@ function previewBlocker(hole) {
   return "";
 }
 
-function previewUrl() {
-  return new URL(
-    `./?draft=1&hole=1&v=${Date.now()}`,
-    window.location.href
-  ).href;
+let previewSession = null;
+
+function stopPreview() {
+  if (previewSession) {
+    previewSession.stop();
+    previewSession = null;
+  }
 }
 
-// A single-hole draft. `analysis` and `mapImage` are deliberately omitted: the
-// game derives analysis itself and falls back to drawing the hole out, which
-// keeps the draft at a few KB instead of megabytes.
-function buildPreviewPackage() {
-  const index = state.holeIndex;
-  const hole = state.course.holes[index];
-  const cut = cutHole(hole, index, state.course.holes, state.course);
-  return {
-    version: 2,
-    id: slugify(state.course.id),
-    name: state.course.name || "My Course",
-    theme: state.course.theme || "verdant",
-    environment: state.course.environment || "canadian",
-    holes: [{ ...cut, index: index + 1 }],
-  };
-}
-
-function writeDraft(data) {
-  const text = JSON.stringify(data);
-  localStorage.setItem(DRAFT_KEY, text);
-  return text;
-}
-
+// The hole is cut into its portrait world and drawn by the game's own course
+// painter, so what you see is what the course looks like in play.
 function showPreview() {
-  if (!PREVIEW_ENABLED) {
-    setStatus(
-      "Preview needs the desktop app — the hosted editor only exports files.",
-      "warn"
-    );
+  const index = state.holeIndex;
+  const blocker = previewBlocker(state.course.holes[index]);
+  if (blocker) {
+    setStatus(blocker, "error");
     return;
   }
   try {
-    const blocker = previewBlocker(state.course.holes[state.holeIndex]);
-    if (blocker) {
-      setStatus(blocker, "error");
-      return;
-    }
-    const text = writeDraft(buildPreviewPackage());
-    if (previewTitleHole) {
-      previewTitleHole.textContent = `HOLE ${state.holeIndex + 1} · UNSAVED`;
-    }
-    previewFrame.src = previewUrl();
+    const cut = cutHole(state.course.holes[index], index, state.course.holes, state.course);
     previewOverlay.classList.remove("hidden");
-    setStatus(
-      `Previewing hole ${state.holeIndex + 1} · ${formatBytes(text.length)} draft`
-    );
+    if (previewTitleHole) {
+      previewTitleHole.textContent = `HOLE ${index + 1} · AS PLAYED`;
+    }
+    stopPreview();
+    previewCanvas.width = 0;
+    previewCanvas.height = 0;
+    setStatus(`Rendering hole ${index + 1}…`);
+    // Let the overlay paint first, then do the expensive course paint.
+    requestAnimationFrame(() => {
+      try {
+        previewSession = startHolePreview(previewCanvas, {
+          hole: { ...cut, index: index + 1 },
+          theme: state.course.theme || "verdant",
+          environment: state.course.environment || "canadian",
+        });
+        setStatus(`Previewing hole ${index + 1} — ${state.course.theme || "verdant"} theme`);
+      } catch (err) {
+        console.error(err);
+        setStatus(`Preview failed: ${err.message}`, "error");
+        hidePreview();
+      }
+    });
   } catch (err) {
     console.error(err);
     setStatus(`Preview failed: ${err.message}`, "error");
@@ -6259,36 +6238,10 @@ function showPreview() {
 }
 
 function hidePreview() {
+  stopPreview();
   previewOverlay.classList.add("hidden");
-  previewFrame.src = "about:blank";
-}
-
-function openPreviewTab() {
-  if (!PREVIEW_ENABLED) {
-    setStatus(
-      "Preview needs the desktop app — the hosted editor only exports files.",
-      "warn"
-    );
-    return;
-  }
-  try {
-    const blocker = previewBlocker(state.course.holes[state.holeIndex]);
-    if (blocker) {
-      setStatus(blocker, "error");
-      return;
-    }
-    writeDraft(buildPreviewPackage());
-    const a = document.createElement("a");
-    a.href = previewUrl();
-    a.target = "_blank";
-    a.rel = "noopener";
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    setStatus(`Opened hole ${state.holeIndex + 1} in a new tab`);
-  } catch (err) {
-    console.error(err);
-    setStatus(`Preview failed: ${err.message}`, "error");
+  if (state.course?.holes?.length) {
+    setStatus(`Editing ${currentHole().name}`);
   }
 }
 
@@ -6726,15 +6679,12 @@ savedCourseList.addEventListener("click", (event) => {
   const del = event.target.closest("[data-del-course]");
   if (del) deleteSavedCourse(Number(del.dataset.delCourse));
 });
-if (PREVIEW_ENABLED) {
-  $("previewBtn").addEventListener("click", showPreview);
-  $("previewReloadBtn").addEventListener("click", showPreview);
-  $("previewTabBtn").addEventListener("click", openPreviewTab);
-  $("previewCloseBtn").addEventListener("click", hidePreview);
-  previewOverlay.addEventListener("click", (event) => {
-    if (event.target === previewOverlay) hidePreview();
-  });
-}
+$("previewBtn").addEventListener("click", showPreview);
+$("previewReloadBtn").addEventListener("click", showPreview);
+$("previewCloseBtn").addEventListener("click", hidePreview);
+previewOverlay.addEventListener("click", (event) => {
+  if (event.target === previewOverlay) hidePreview();
+});
 courseDialog.addEventListener("click", (event) => {
   if (event.target === courseDialog) closeCourseDialog();
 });
@@ -6949,7 +6899,6 @@ window.__editor = {
   exportCourse,
   exportPackage,
   serialisePart,
-  buildPreviewPackage,
   loadCourseFileData,
   applyUiScale,
   mergeBrush,
