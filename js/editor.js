@@ -38,7 +38,10 @@ const MAX_MERGE_CELLS = 5000000;
 // snapshot until the browser runs out of memory.
 const MAX_POLY_POINTS = 4000;
 const CART_CLEARANCE = 44;
-const LIBRARY_KEY = "golfpocket.editorLibrary.v1";
+// Drafts live in IndexedDB now; localStorage is only read once to migrate the
+// old library. Large courses easily exceeded the ~5 MB localStorage quota.
+const LIBRARY_KEY = "savedDrafts";
+const LEGACY_LIBRARY_KEY = "golfpocket.editorLibrary.v1";
 const MIN_ZOOM = 0.04;
 const MAX_ZOOM = 3;
 const PACKAGE_FORMAT = "glfpkt";
@@ -49,6 +52,7 @@ const PART_FORMAT = "glfppart";
 const PART_VERSION = 1;
 const AUTOSAVE_KEY = "autosave";
 const PART_HANDLE_KEY = "partFileHandle";
+const PART_PATH_KEY = "partFilePath";
 const UI_SCALE_KEY = "uiScale";
 const UI_SCALE_STEPS = [0.85, 1, 1.15, 1.3, 1.5, 1.75];
 const EXPORT_WIDTH = 1700;
@@ -266,6 +270,7 @@ const courseDialogHelpEl = $("courseDialogHelp");
 const courseConfirmBtn = $("courseConfirmBtn");
 const undoBtn = $("undoBtn");
 const redoBtn = $("redoBtn");
+const saveStateEl = $("saveState");
 const previewOverlay = $("previewOverlay");
 const previewCanvas = $("previewCanvas");
 const previewTitleHole = $("previewTitleHole");
@@ -378,6 +383,10 @@ let courseDialogMode = "new";
 let setupHoleCount = 9;
 let setupIdTouched = false;
 let setupExistingCount = 9;
+let libraryCache = [];
+let libraryLoaded = false;
+let lastSavedAt = 0;
+let lastAutosaveAt = 0;
 
 // ---------------------------------------------------------------- data model
 const clone = (value) => JSON.parse(JSON.stringify(value));
@@ -1080,6 +1089,7 @@ function invalidatePreview() {
 function commit() {
   const snap = JSON.stringify(state.course);
   state.dirty = true;
+  updateSaveState();
   scheduleAutosave();
   if (historyIndex >= 0 && snap === history[historyIndex]) {
     updateHistoryButtons();
@@ -1101,6 +1111,41 @@ function resetHistory() {
 function updateHistoryButtons() {
   undoBtn.disabled = historyIndex <= 0;
   redoBtn.disabled = historyIndex < 0 || historyIndex >= history.length - 1;
+}
+
+// ---------------------------------------------------------------- save state
+function clockLabel(timestamp) {
+  return new Date(timestamp).toLocaleTimeString(undefined, {
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+function updateSaveState() {
+  if (!saveStateEl) return;
+  const dirty = !!state.dirty;
+  saveStateEl.classList.toggle("dirty", dirty);
+  saveStateEl.classList.toggle("saved", !dirty && lastSavedAt > 0);
+  if (dirty) {
+    saveStateEl.textContent = lastAutosaveAt
+      ? `UNSAVED · AUTO ${clockLabel(lastAutosaveAt)}`
+      : "UNSAVED";
+    saveStateEl.title = lastAutosaveAt
+      ? `Unsaved changes. A backup was autosaved at ${clockLabel(lastAutosaveAt)} in this browser.`
+      : "Unsaved changes";
+  } else if (lastSavedAt) {
+    saveStateEl.textContent = `SAVED ${clockLabel(lastSavedAt)}`;
+    saveStateEl.title = `Last saved at ${clockLabel(lastSavedAt)}`;
+  } else {
+    saveStateEl.textContent = "READY";
+    saveStateEl.title = "No changes yet";
+  }
+}
+
+function markSaved() {
+  state.dirty = false;
+  lastSavedAt = Date.now();
+  updateSaveState();
 }
 
 // ---------------------------------------------------------------- autosave
@@ -1131,6 +1176,10 @@ async function flushAutosave() {
   if (text === autosaveSnapshot) return;
   autosaveSnapshot = text;
   const ok = await Store.setItem(AUTOSAVE_KEY, part);
+  if (ok) {
+    lastAutosaveAt = Date.now();
+    updateSaveState();
+  }
   if (!ok && !autosaveWarned) {
     autosaveWarned = true;
     setStatus(
@@ -1146,7 +1195,9 @@ async function restoreAutosave() {
   try {
     loadCourseFileData(part);
     autosaveSnapshot = JSON.stringify(part);
-    state.dirty = false;
+    lastSavedAt = Date.now();
+    lastAutosaveAt = Date.now();
+    markSaved();
     const when = part.updatedAt ? savedDateLabel(Date.parse(part.updatedAt)) : "earlier";
     setStatus(
       `Restored unsaved work: “${state.course.name}” · ${state.course.holes.length} holes · ${when}`
@@ -2472,6 +2523,10 @@ function submitCourseDialog(event) {
     state.partCreatedAt = null;
     clearAutosave();
     resetHistory();
+    state.dirty = false;
+    lastSavedAt = 0;
+    lastAutosaveAt = 0;
+    updateSaveState();
     applyCourse();
     refreshUI();
     fitView();
@@ -6035,18 +6090,63 @@ function serialisePart() {
   };
 }
 
-function readLibrary() {
-  try {
-    const parsed = JSON.parse(localStorage.getItem(LIBRARY_KEY) || "[]");
-    return Array.isArray(parsed) ? parsed : [];
-  } catch (err) {
-    console.warn("Could not read saved courses", err);
-    return [];
+function mergeLibraries(primary, legacy) {
+  const byId = new Map();
+  for (const entry of primary || []) {
+    if (!entry || !entry.course) continue;
+    const id = entry.course.id || entry.course.name || "";
+    byId.set(id, entry);
   }
+  for (const entry of legacy || []) {
+    if (!entry || !entry.course) continue;
+    const id = entry.course.id || entry.course.name || "";
+    const existing = byId.get(id);
+    if (!existing || (entry.savedAt || 0) > (existing.savedAt || 0)) {
+      byId.set(id, entry);
+    }
+  }
+  return [...byId.values()].sort((a, b) => (b.savedAt || 0) - (a.savedAt || 0));
 }
 
-function writeLibrary(entries) {
-  localStorage.setItem(LIBRARY_KEY, JSON.stringify(entries));
+async function hydrateLibrary() {
+  if (libraryLoaded) return libraryCache;
+  const stored = await Store.getItem(LIBRARY_KEY);
+  let entries = Array.isArray(stored) ? stored : [];
+  let legacy = [];
+  try {
+    const raw = localStorage.getItem(LEGACY_LIBRARY_KEY);
+    if (raw) legacy = JSON.parse(raw);
+  } catch (err) {
+    console.warn("Could not read the old local save library", err);
+  }
+  if (Array.isArray(legacy) && legacy.length) {
+    entries = mergeLibraries(entries, legacy);
+    const ok = await Store.setItem(LIBRARY_KEY, entries);
+    if (ok) localStorage.removeItem(LEGACY_LIBRARY_KEY);
+    else console.warn("Could not migrate the old local save library");
+  }
+  libraryCache = Array.isArray(entries) ? entries : [];
+  libraryLoaded = true;
+  return libraryCache;
+}
+
+function readLibrary() {
+  return libraryCache;
+}
+
+async function writeLibrary(entries) {
+  const previous = libraryCache;
+  libraryCache = entries;
+  const ok = await Store.setItem(LIBRARY_KEY, entries);
+  if (ok) return;
+  // IndexedDB can be unavailable in private windows. Keep the old localStorage
+  // path as a last resort instead of losing the save outright.
+  try {
+    localStorage.setItem(LEGACY_LIBRARY_KEY, JSON.stringify(entries));
+  } catch (err) {
+    libraryCache = previous;
+    throw new Error("This browser could not store the draft.");
+  }
 }
 
 function savedDateLabel(timestamp) {
@@ -6061,8 +6161,9 @@ function savedDateLabel(timestamp) {
   });
 }
 
-function saveCurrentCourse() {
+async function saveCurrentCourse() {
   try {
+    await hydrateLibrary();
     const data = serialiseCourse();
     const entries = readLibrary();
     const entry = {
@@ -6077,10 +6178,10 @@ function saveCurrentCourse() {
     if (index >= 0) entries[index] = entry;
     else entries.push(entry);
     entries.sort((a, b) => (b.savedAt || 0) - (a.savedAt || 0));
-    writeLibrary(entries);
-    state.dirty = false;
+    await writeLibrary(entries);
+    markSaved();
     setStatus(
-      `Saved “${data.name}” locally · ${data.holes.length} holes · hole ${
+      `Saved draft “${data.name}” in this browser · ${data.holes.length} holes · hole ${
         state.holeIndex + 1
       } — use SAVE FILE to keep a copy outside this browser`
     );
@@ -6099,6 +6200,16 @@ function formatBytes(bytes) {
 function partFileName() {
   const id = slugify(state.course?.id || state.course?.name || "course");
   return `${id || "course"}.glfppart`;
+}
+
+function partPathKey() {
+  const id = slugify(state.course?.id || state.course?.name || "course");
+  return `${PART_PATH_KEY}:${id || "course"}`;
+}
+
+function partHandleKey() {
+  const id = slugify(state.course?.id || state.course?.name || "course");
+  return `${PART_HANDLE_KEY}:${id || "course"}`;
 }
 
 // Applies the resumable editor half of a part (or library entry).
@@ -6167,9 +6278,31 @@ async function savePartFile() {
     const text = JSON.stringify(part, null, 2);
     const filename = partFileName();
     const holes = part.course.holes.length;
+    const desktop = window.golfpocketDesktop;
+    if (desktop?.saveFile) {
+      const defaultPath = (await Store.getItem(partPathKey())) || "";
+      const result = await desktop.saveFile({
+        text,
+        suggestedName: filename,
+        defaultPath,
+      });
+      if (!result || result.canceled) {
+        setStatus("Save cancelled.");
+        return;
+      }
+      if (result.error) throw new Error(result.error);
+      if (result.filePath) await Store.setItem(partPathKey(), result.filePath);
+      markSaved();
+      setStatus(
+        `Saved “${result.filePath || filename}” · ${holes} hole${
+          holes === 1 ? "" : "s"
+        } · ${formatBytes(text.length)}`
+      );
+      return;
+    }
     if (window.showSaveFilePicker) {
       try {
-        let handle = await Store.getItem(PART_HANDLE_KEY);
+        let handle = await Store.getItem(partHandleKey());
         const suggestion = { suggestedName: filename, types: [
           { description: "GolfPocket course part", accept: { "application/json": [".glfppart"] } },
         ] };
@@ -6183,12 +6316,12 @@ async function savePartFile() {
         }
         if (!handle) {
           handle = await window.showSaveFilePicker(suggestion);
-          await Store.setItem(PART_HANDLE_KEY, handle);
+          await Store.setItem(partHandleKey(), handle);
         }
         const writable = await handle.createWritable();
         await writable.write(text);
         await writable.close();
-        state.dirty = false;
+        markSaved();
         setStatus(
           `Saved “${handle.name}” · ${holes} hole${holes === 1 ? "" : "s"} · ${formatBytes(
             text.length
@@ -6201,12 +6334,12 @@ async function savePartFile() {
           return;
         }
         // A stale file handle should not block every future save.
-        await Store.removeItem(PART_HANDLE_KEY);
+        await Store.removeItem(partHandleKey());
         // Fall through to a download if the picker is unavailable or blocked.
       }
     }
     downloadFile(text, filename, "application/x-golfpocket-part");
-    state.dirty = false;
+    markSaved();
     setStatus(
       `Downloaded ${filename} · ${holes} hole${holes === 1 ? "" : "s"} · ${formatBytes(
         text.length
@@ -6222,7 +6355,7 @@ function renderSavedCourses() {
   const entries = readLibrary();
   if (!entries.length) {
     savedCourseList.innerHTML =
-      '<div class="ed-empty">No saved courses yet. Edit a course and press SAVE.</div>';
+      '<div class="ed-empty">No saved drafts yet. Edit a course and press SAVE DRAFT.</div>';
     return;
   }
   savedCourseList.innerHTML = entries
@@ -6253,8 +6386,15 @@ function renderSavedCourses() {
 }
 
 function openLibraryDialog() {
-  renderSavedCourses();
-  libraryDialog.classList.remove("hidden");
+  hydrateLibrary()
+    .then(() => {
+      renderSavedCourses();
+      libraryDialog.classList.remove("hidden");
+    })
+    .catch((err) => {
+      console.error(err);
+      setStatus(`Could not read saved drafts: ${err.message}`, "error");
+    });
 }
 
 function closeLibraryDialog() {
@@ -6265,32 +6405,40 @@ function loadSavedCourse(index) {
   const entries = readLibrary();
   const entry = entries[index];
   if (!entry || !entry.course) {
-    setStatus("That saved course could not be found.", "warn");
+    setStatus("That saved draft could not be found.", "warn");
     return;
   }
   try {
     state.course = normaliseCourse(clone(entry.course));
     state.meta = normaliseMeta(entry.meta);
     state.partCreatedAt = null;
+    lastSavedAt = Number(entry.savedAt) || Date.now();
     afterSnapshotLoad(entry);
+    markSaved();
     closeLibraryDialog();
-    setStatus(`Loaded “${state.course.name}” from local saves`);
+    setStatus(`Loaded draft “${state.course.name}” from this browser`);
   } catch (err) {
     console.error(err);
     setStatus(`Load failed: ${err.message}`, "error");
   }
 }
 
-function deleteSavedCourse(index) {
+async function deleteSavedCourse(index) {
   const entries = readLibrary();
   const entry = entries[index];
   if (!entry) return;
   const name = entry.course?.name || entry.course?.id || "this course";
-  if (!window.confirm(`Delete the local save for “${name}”?`)) return;
-  entries.splice(index, 1);
-  writeLibrary(entries);
-  renderSavedCourses();
-  setStatus("Local save deleted");
+  if (!window.confirm(`Delete the saved draft for “${name}”?`)) return;
+  const next = entries.slice();
+  next.splice(index, 1);
+  try {
+    await writeLibrary(next);
+    renderSavedCourses();
+    setStatus("Saved draft deleted");
+  } catch (err) {
+    console.error(err);
+    setStatus(`Could not delete the draft: ${err.message}`, "error");
+  }
 }
 
 function beginMapSelection() {
@@ -6443,7 +6591,7 @@ function downloadExportPackage() {
   const text = JSON.stringify(pkg, null, 2);
   const filename = `${pkg.course.id}.glfpkt`;
   downloadFile(text, filename, "application/x-golfpocket-course");
-  state.dirty = false;
+  markSaved();
   publishCopyStatus.textContent = `Downloaded ${filename} · ${formatBytes(
     text.length
   )}. Send it to a friend — they import it from the game's Settings screen.`;
@@ -6550,23 +6698,56 @@ function loadCourseFileData(raw) {
   return Boolean(part);
 }
 
+function importFileText(text, name = "") {
+  try {
+    const raw = JSON.parse(text);
+    const wasPart = loadCourseFileData(raw);
+    const holes = state.course.holes.length;
+    markSaved();
+    setStatus(
+      `${wasPart ? "Resumed" : "Opened"} “${state.course.name}” · ${holes} hole${
+        holes === 1 ? "" : "s"
+      }${wasPart ? ` · hole ${state.holeIndex + 1}` : ""}`
+    );
+    return true;
+  } catch (err) {
+    console.error(err);
+    setStatus(
+      `Could not open ${name ? `“${name}”` : "that file"}: ${err.message}`,
+      "error"
+    );
+    return false;
+  }
+}
+
 function importJSONFile(file) {
   return file
     .text()
-    .then((text) => {
-      const raw = JSON.parse(text);
-      const wasPart = loadCourseFileData(raw);
-      const holes = state.course.holes.length;
-      setStatus(
-        `${wasPart ? "Resumed" : "Opened"} “${state.course.name}” · ${holes} hole${
-          holes === 1 ? "" : "s"
-        }${wasPart ? ` · hole ${state.holeIndex + 1}` : ""}`
-      );
-    })
+    .then((text) => importFileText(text, file.name || ""))
     .catch((err) => {
       console.error(err);
       setStatus(`Could not open that file: ${err.message}`, "error");
     });
+}
+
+async function requestOpenFile() {
+  const desktop = window.golfpocketDesktop;
+  if (desktop?.openFile) {
+    try {
+      const result = await desktop.openFile();
+      if (!result || result.canceled) return;
+      if (result.error) throw new Error(result.error);
+      const ok = importFileText(result.text || "", result.name || "");
+      if (ok && result.filePath && /\.glfppart$/i.test(result.filePath)) {
+        await Store.setItem(partPathKey(), result.filePath);
+      }
+    } catch (err) {
+      console.error(err);
+      setStatus(`Could not open that file: ${err.message}`, "error");
+    }
+    return;
+  }
+  $("importFile").click();
 }
 
 // ---------------------------------------------------------------- events
@@ -6835,7 +7016,13 @@ canvas.addEventListener("contextmenu", (event) => {
 document.addEventListener("keydown", (event) => {
   if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "s") {
     event.preventDefault();
-    saveCurrentCourse();
+    if (event.shiftKey) saveCurrentCourse();
+    else savePartFile();
+    return;
+  }
+  if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "o") {
+    event.preventDefault();
+    requestOpenFile();
     return;
   }
   if (state.mapSelect) {
@@ -6979,7 +7166,7 @@ setupCountsEl.addEventListener("click", (event) => {
 $("exportBtn").addEventListener("click", downloadExport);
 mapSelectConfirmBtn?.addEventListener("click", confirmMapSelection);
 mapSelectCancelBtn?.addEventListener("click", cancelMapSelection);
-$("importBtn").addEventListener("click", () => $("importFile").click());
+$("importBtn").addEventListener("click", requestOpenFile);
 $("importFile").addEventListener("change", (event) => {
   const file = event.target.files?.[0];
   if (file) importJSONFile(file);
@@ -7139,13 +7326,16 @@ async function boot() {
     Number.isFinite(storedScale) && storedScale > 0 ? storedScale : 1,
     { persist: false }
   );
+  await hydrateLibrary();
   canvas.style.cursor = "grab";
   resetHistory();
   applyCourse();
   refreshUI();
+  updateSaveState();
   selectHole(0);
   resize();
   const restored = await restoreAutosave();
+  updateSaveState();
   requestAnimationFrame(() => {
     if (!state.fitted) {
       fitView();
