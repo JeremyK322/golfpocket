@@ -7,10 +7,11 @@ import {
   loadCourseData,
   setHole,
   WORLD,
-} from "./course.js?v=c20301f3";
-import { paintCourse } from "./paint.js?v=c20301f3";
-import { ShoreWaves } from "./waves.js?v=c20301f3";
-import { drawFlag, drawTree } from "./holeArt.js?v=c20301f3";
+} from "./course.js?v=bf5caebb-dirty";
+import { paintCourse } from "./paint.js?v=bf5caebb-dirty";
+import { ShoreWaves } from "./waves.js?v=bf5caebb-dirty";
+import { drawFlag, drawTree } from "./holeArt.js?v=bf5caebb-dirty";
+import { drawThemeGrade, ThemeLife } from "./themeFx.js?v=bf5caebb-dirty";
 
 const MIN_FRAME_MS = 1000 / 30;
 
@@ -47,6 +48,7 @@ export function startHolePreview(canvas, { hole, theme = "verdant", environment 
     .sort((a, b) => a.tree.y - b.tree.y);
   const waves = new ShoreWaves();
   waves.build(HOLE, `preview:${HOLE.index}`);
+  const themeLife = new ThemeLife(theme, environment, `preview:${HOLE.index}`);
 
   const ctx = canvas.getContext("2d");
   const stage = canvas.parentElement;
@@ -99,7 +101,11 @@ export function startHolePreview(canvas, { hole, theme = "verdant", environment 
     } catch (err) {
       // Water is decoration; never let it break the preview.
     }
+    themeLife.drawWater(ctx, time, false);
+    themeLife.drawFireflies(ctx, time, false);
     ctx.restore();
+
+    drawThemeGrade(ctx, theme, boxW, boxH);
   }
 
   function frame(now) {

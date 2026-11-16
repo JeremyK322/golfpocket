@@ -11,8 +11,8 @@ import {
   PAINT_SEED,
   PX_PER_METRE,
   surfaceAt,
-} from "./course.js?v=c20301f3";
-import { drawScenery } from "./scenery.js?v=c20301f3";
+} from "./course.js?v=bf5caebb-dirty";
+import { drawScenery } from "./scenery.js?v=bf5caebb-dirty";
 import { circleUnionPath, mulberry32, pointInPoly, rr, TAU } from "./util.js";
 
 function makeNoiseTile(rng, size, colors, count) {
@@ -859,9 +859,9 @@ export function paintCourse(themeId = "verdant", options = {}) {
   ctx.fillRect(0, 0, WORLD.w, WORLD.h);
 
   const themeOverlay = {
-    autumn: "rgba(196, 104, 34, 0.20)",
-    links: "rgba(225, 196, 104, 0.17)",
-    night: "rgba(14, 27, 76, 0.46)",
+    autumn: "rgba(196, 104, 34, 0.32)",
+    links: "rgba(225, 196, 104, 0.27)",
+    night: "rgba(14, 27, 76, 0.58)",
   }[themeId];
   if (themeOverlay) {
     ctx.save();

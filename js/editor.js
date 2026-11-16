@@ -1,6 +1,6 @@
 // GolfPocket course editor. A standalone desktop/tablet tool that edits the
 // same JSON schema the game loads from courses/*.json.
-import * as C from "./course.js?v=c20301f3";
+import * as C from "./course.js?v=bf5caebb-dirty";
 import {
   clamp,
   closedSplinePoints,
@@ -23,13 +23,20 @@ import {
   drawProp,
   drawRoad,
   drawFlowerBed,
-} from "./scenery.js?v=c20301f3";
-import { analyseCourse } from "./stableford.js?v=c20301f3";
-import * as Store from "./editorStore.js?v=c20301f3";
-import { startHolePreview } from "./holePreview.js?v=c20301f3";
+} from "./scenery.js?v=bf5caebb-dirty";
+import { analyseCourse } from "./stableford.js?v=bf5caebb-dirty";
+import * as Store from "./editorStore.js?v=bf5caebb-dirty";
+import { startHolePreview } from "./holePreview.js?v=bf5caebb-dirty";
 
 const WORLD = C.BASE_WORLD;
 const CELL = 4;
+// Brush merges never allocate more cells than this. Very large courses grow the
+// merge cells instead of allocating hundreds of megabytes of grid.
+const MAX_MERGE_CELLS = 5000000;
+// A single painted shape is simplified to at most this many points before it
+// goes into undo history. Without a cap, a giant ocean slowly bloats every
+// snapshot until the browser runs out of memory.
+const MAX_POLY_POINTS = 4000;
 const CART_CLEARANCE = 44;
 const LIBRARY_KEY = "golfpocket.editorLibrary.v1";
 const MIN_ZOOM = 0.04;
@@ -2532,7 +2539,7 @@ function editHole(mutator, options = {}) {
 }
 
 // ---------------------------------------------------------------- brush merge
-function fillPolyGrid(grid, gw, gh, poly, originX = 0, originY = 0) {
+function fillPolyGrid(grid, gw, gh, poly, originX = 0, originY = 0, cell = CELL) {
   if (!poly || poly.length < 3) return;
   let minX = Infinity;
   let maxX = -Infinity;
@@ -2544,88 +2551,161 @@ function fillPolyGrid(grid, gw, gh, poly, originX = 0, originY = 0) {
     minY = Math.min(minY, y);
     maxY = Math.max(maxY, y);
   }
-  const x0 = clamp(Math.floor((minX - originX) / CELL), 0, gw - 1);
-  const x1 = clamp(Math.ceil((maxX - originX) / CELL), 0, gw - 1);
-  const y0 = clamp(Math.floor((minY - originY) / CELL), 0, gh - 1);
-  const y1 = clamp(Math.ceil((maxY - originY) / CELL), 0, gh - 1);
+  const y0 = clamp(Math.floor((minY - originY) / cell), 0, gh - 1);
+  const y1 = clamp(Math.ceil((maxY - originY) / cell), 0, gh - 1);
+  const xs = [];
   for (let gy = y0; gy <= y1; gy++) {
-    const py = originY + (gy + 0.5) * CELL;
-    for (let gx = x0; gx <= x1; gx++) {
-      const px = originX + (gx + 0.5) * CELL;
-      if (pointInPoly(px, py, poly)) grid[gy * gw + gx] = 1;
+    const py = originY + (gy + 0.5) * cell;
+    xs.length = 0;
+    for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+      const yi = poly[i][1];
+      const yj = poly[j][1];
+      if ((yi > py) === (yj > py)) continue;
+      xs.push(poly[i][0] + ((py - yi) * (poly[j][0] - poly[i][0])) / (yj - yi));
+    }
+    if (xs.length < 2) continue;
+    xs.sort((a, b) => a - b);
+    const row = gy * gw;
+    for (let k = 0; k + 1 < xs.length; k += 2) {
+      // Keep grid cells whose centres fall between the two intersections.
+      const start = clamp(
+        Math.ceil((xs[k] - originX) / cell - 0.5),
+        0,
+        gw - 1
+      );
+      const end = clamp(
+        Math.floor((xs[k + 1] - originX) / cell - 0.5),
+        0,
+        gw - 1
+      );
+      for (let gx = start; gx <= end; gx++) grid[row + gx] = 1;
     }
   }
 }
 
-function fillCircleGrid(grid, gw, gh, circle, originX = 0, originY = 0) {
+function fillCircleGrid(grid, gw, gh, circle, originX = 0, originY = 0, cell = CELL) {
   const r = Math.max(2, circle.r);
-  const x0 = clamp(Math.floor((circle.x - r - originX) / CELL), 0, gw - 1);
-  const x1 = clamp(Math.ceil((circle.x + r - originX) / CELL), 0, gw - 1);
-  const y0 = clamp(Math.floor((circle.y - r - originY) / CELL), 0, gh - 1);
-  const y1 = clamp(Math.ceil((circle.y + r - originY) / CELL), 0, gh - 1);
+  const x0 = clamp(Math.floor((circle.x - r - originX) / cell), 0, gw - 1);
+  const x1 = clamp(Math.ceil((circle.x + r - originX) / cell), 0, gw - 1);
+  const y0 = clamp(Math.floor((circle.y - r - originY) / cell), 0, gh - 1);
+  const y1 = clamp(Math.ceil((circle.y + r - originY) / cell), 0, gh - 1);
   const r2 = r * r;
   for (let gy = y0; gy <= y1; gy++) {
-    const py = originY + (gy + 0.5) * CELL;
+    const py = originY + (gy + 0.5) * cell;
+    const row = gy * gw;
     for (let gx = x0; gx <= x1; gx++) {
-      const px = originX + (gx + 0.5) * CELL;
+      const px = originX + (gx + 0.5) * cell;
       if ((px - circle.x) ** 2 + (py - circle.y) ** 2 <= r2) {
-        grid[gy * gw + gx] = 1;
+        grid[row + gx] = 1;
       }
     }
   }
 }
 
 function boundaryLoops(grid, gw, gh) {
-  const edges = [];
-  const starts = new Map();
-  const key = (x, y) => `${x},${y}`;
-  const addEdge = (a, b) => {
-    edges.push([a, b]);
-    const k = key(a[0], a[1]);
-    let list = starts.get(k);
-    if (!list) {
-      list = [];
-      starts.set(k, list);
-    }
-    list.push(edges.length - 1);
+  const vertexW = gw + 1;
+  const vertexKey = (x, y) => y * vertexW + x;
+  const edgeA = [];
+  const edgeB = [];
+  const head = new Int32Array(vertexW * (gh + 1));
+  head.fill(-1);
+  const nextEdge = [];
+  const addEdge = (ax, ay, bx, by) => {
+    const index = edgeA.length;
+    edgeA.push(vertexKey(ax, ay));
+    edgeB.push(vertexKey(bx, by));
+    const start = vertexKey(ax, ay);
+    nextEdge.push(head[start]);
+    head[start] = index;
   };
 
   for (let gy = 0; gy < gh; gy++) {
+    const row = gy * gw;
     for (let gx = 0; gx < gw; gx++) {
-      if (!grid[gy * gw + gx]) continue;
-      if (gy === 0 || !grid[(gy - 1) * gw + gx]) addEdge([gx, gy], [gx + 1, gy]);
-      if (gx === gw - 1 || !grid[gy * gw + gx + 1]) addEdge([gx + 1, gy], [gx + 1, gy + 1]);
-      if (gy === gh - 1 || !grid[(gy + 1) * gw + gx]) addEdge([gx + 1, gy + 1], [gx, gy + 1]);
-      if (gx === 0 || !grid[gy * gw + gx - 1]) addEdge([gx, gy + 1], [gx, gy]);
+      if (!grid[row + gx]) continue;
+      if (gy === 0 || !grid[row - gw + gx]) addEdge(gx, gy, gx + 1, gy);
+      if (gx === gw - 1 || !grid[row + gx + 1]) addEdge(gx + 1, gy, gx + 1, gy + 1);
+      if (gy === gh - 1 || !grid[row + gw + gx]) addEdge(gx + 1, gy + 1, gx, gy + 1);
+      if (gx === 0 || !grid[row + gx - 1]) addEdge(gx, gy + 1, gx, gy);
     }
   }
 
-  const used = new Uint8Array(edges.length);
+  const used = new Uint8Array(edgeA.length);
   const loops = [];
-  for (let i = 0; i < edges.length; i++) {
+  const maxSteps = edgeA.length + 2;
+  for (let i = 0; i < edgeA.length; i++) {
     if (used[i]) continue;
+    const startVertex = edgeA[i];
     const loop = [];
     let cursor = i;
-    let guard = 0;
-    while (cursor >= 0 && cursor < edges.length && !used[cursor] && guard++ < 60000) {
+    let steps = 0;
+    let closed = false;
+    while (cursor >= 0 && steps++ < maxSteps) {
       used[cursor] = 1;
-      const [, b] = edges[cursor];
-      loop.push(edges[cursor][0]);
-      const candidates = starts.get(key(b[0], b[1]));
-      let next = -1;
-      if (candidates) {
-        for (const j of candidates) {
-          if (!used[j]) {
-            next = j;
-            break;
-          }
-        }
+      const ax = edgeA[cursor];
+      const bx = edgeB[cursor];
+      loop.push([ax % vertexW, (ax / vertexW) | 0]);
+      if (bx === startVertex) {
+        closed = true;
+        break;
       }
+      let next = head[bx];
+      while (next >= 0 && used[next]) next = nextEdge[next];
       cursor = next;
     }
-    if (loop.length >= 4) loops.push(loop);
+    if (closed && loop.length >= 4) loops.push(loop);
   }
   return loops;
+}
+
+// Remove points that lie in the middle of a straight run. Boundary loops are
+// made of many collinear grid steps, and dropping them makes the expensive
+// simplifier below far cheaper without changing the shape.
+function cullCollinear(points) {
+  const n = points.length;
+  if (n < 4) return points;
+  const out = [];
+  for (let i = 0; i < n; i++) {
+    const a = points[(i - 1 + n) % n];
+    const b = points[i];
+    const c = points[(i + 1) % n];
+    const cross =
+      (b[0] - a[0]) * (c[1] - b[1]) - (b[1] - a[1]) * (c[0] - b[0]);
+    if (cross !== 0) out.push(b);
+  }
+  return out.length >= 3 ? out : points;
+}
+
+function vertexReduce(points, minDistance) {
+  const min2 = minDistance * minDistance;
+  const out = [points[0]];
+  for (let i = 1; i < points.length; i++) {
+    const p = points[i];
+    const last = out[out.length - 1];
+    if ((p[0] - last[0]) ** 2 + (p[1] - last[1]) ** 2 >= min2) out.push(p);
+  }
+  if (out.length >= 3) return out;
+  return points;
+}
+
+function simplifyLoop(points) {
+  if (points.length < 5) return points;
+  let perimeter = 0;
+  for (let i = 0; i < points.length; i++) {
+    const a = points[i];
+    const b = points[(i + 1) % points.length];
+    perimeter += Math.hypot(b[0] - a[0], b[1] - a[1]);
+  }
+  // Bigger shapes are allowed a slightly coarser shoreline. This keeps the
+  // stored point count bounded without changing small brush shapes.
+  const epsilon = Math.max(2.4, perimeter / MAX_POLY_POINTS);
+  const reduced = vertexReduce(points, Math.max(0.5, epsilon * 0.5));
+  let simplified = rdpClosed(reduced, epsilon);
+  if (simplified.length > MAX_POLY_POINTS) {
+    const stride = Math.ceil(simplified.length / MAX_POLY_POINTS);
+    simplified = simplified.filter((_, i) => i % stride === 0);
+  }
+  return simplified;
 }
 
 function rdpOpen(points, epsilon) {
@@ -2696,22 +2776,33 @@ function polyArea(poly) {
 
 function mergeBrush(existingPolys, circles) {
   const b = designBounds();
-  const originX = Math.floor(b.minX) - CELL * 2;
-  const originY = Math.floor(b.minY) - CELL * 2;
-  const gw = Math.max(1, Math.ceil((b.maxX - originX) / CELL) + 2);
-  const gh = Math.max(1, Math.ceil((b.maxY - originY) / CELL) + 2);
+  const width = Math.max(1, b.maxX - b.minX);
+  const height = Math.max(1, b.maxY - b.minY);
+  // Keep the grid bounded. On normal courses this stays at CELL; only very
+  // large designs (or an enormous painted ocean) coarsen the merge grid.
+  const cell = Math.max(
+    CELL,
+    Math.ceil(Math.sqrt((width * height) / MAX_MERGE_CELLS))
+  );
+  const originX = Math.floor(b.minX) - cell * 2;
+  const originY = Math.floor(b.minY) - cell * 2;
+  const gw = Math.max(1, Math.ceil((b.maxX - originX) / cell) + 2);
+  const gh = Math.max(1, Math.ceil((b.maxY - originY) / cell) + 2);
   const grid = new Uint8Array(gw * gh);
-  for (const poly of existingPolys || []) fillPolyGrid(grid, gw, gh, poly, originX, originY);
-  for (const circle of circles) fillCircleGrid(grid, gw, gh, circle, originX, originY);
+  for (const poly of existingPolys || []) {
+    fillPolyGrid(grid, gw, gh, poly, originX, originY, cell);
+  }
+  for (const circle of circles) {
+    fillCircleGrid(grid, gw, gh, circle, originX, originY, cell);
+  }
 
   const loops = boundaryLoops(grid, gw, gh);
   const polys = [];
   for (const loop of loops) {
-    const world = loop.map(([gx, gy]) => [
-      originX + gx * CELL,
-      originY + gy * CELL,
-    ]);
-    let simplified = rdpClosed(world, 2.4);
+    const world = cullCollinear(
+      loop.map(([gx, gy]) => [originX + gx * cell, originY + gy * cell])
+    );
+    let simplified = simplifyLoop(world);
     // Drop a duplicated closing point if the simplifier produced one.
     if (
       simplified.length > 1 &&
@@ -4180,6 +4271,7 @@ function drawOverlays() {
   const p = state.pointer;
   const brushActive =
     state.tool === "pond" ||
+    state.tool === "ocean" ||
     state.tool === "bunker" ||
     (state.tool === "fairway" && state.settings.fairwayMode === "paint") ||
     (state.tool === "green" && state.settings.greenMode === "paint");
@@ -4194,13 +4286,20 @@ function drawOverlays() {
       const strokeFill =
         state.stroke.type === "pond"
           ? "rgba(80,190,215,0.4)"
+          : state.stroke.type === "ocean"
+          ? "rgba(46,150,196,0.42)"
           : state.stroke.type === "greenPaint"
           ? "rgba(95,200,95,0.4)"
           : state.stroke.type === "fairwayPaint"
           ? "rgba(95,167,66,0.4)"
           : "rgba(240,215,155,0.45)";
       ctx.fillStyle = strokeFill;
-      for (const c of state.stroke.circles) {
+      const previewStep =
+        state.stroke.circles.length > 400
+          ? Math.ceil(state.stroke.circles.length / 400)
+          : 1;
+      for (let i = 0; i < state.stroke.circles.length; i += previewStep) {
+        const c = state.stroke.circles[i];
         const s = w2s(c.x, c.y);
         ctx.beginPath();
         ctx.arc(s.x, s.y, c.r * state.zoom, 0, TAU);
@@ -4213,6 +4312,8 @@ function drawOverlays() {
     ctx.strokeStyle =
       state.tool === "pond"
         ? "rgba(123,215,232,0.9)"
+        : state.tool === "ocean"
+        ? "rgba(112,214,255,0.95)"
         : state.tool === "green"
         ? "rgba(155,232,111,0.95)"
         : state.tool === "fairway"
