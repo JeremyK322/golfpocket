@@ -143,6 +143,30 @@ body {
   font-variant-numeric: tabular-nums;
 }
 
+.ed-savestate {
+  display: inline-flex;
+  align-items: center;
+  padding: calc(4px * var(--ui)) calc(8px * var(--ui));
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.12);
+  color: var(--cream-dim);
+  font-size: calc(9px * var(--ui));
+  letter-spacing: 0.09em;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.ed-savestate.dirty {
+  color: #ffd23f;
+  border-color: rgba(255, 210, 63, 0.55);
+}
+
+.ed-savestate.saved {
+  color: var(--lime);
+  border-color: rgba(139, 210, 90, 0.55);
+}
+
 button {
   font-family: var(--font);
   cursor: pointer;

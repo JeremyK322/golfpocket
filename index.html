@@ -28,10 +28,11 @@
           <button id="redoBtn" class="small">REDO</button>
           <button id="newBtn" class="small">NEW COURSE</button>
           <button id="setupBtn" class="small">SETUP</button>
-          <button id="saveFileBtn" class="small">SAVE FILE</button>
-          <button id="saveBtn" class="small">SAVE</button>
-          <button id="loadBtn" class="small">OPEN</button>
-          <button id="importBtn" class="small">IMPORT</button>
+          <span id="saveState" class="ed-savestate">READY</span>
+          <button id="saveFileBtn" class="small" title="Save a resumable .glfppart file (Ctrl/Cmd+S)">SAVE FILE</button>
+          <button id="saveBtn" class="small" title="Save a draft inside this browser">SAVE DRAFT</button>
+          <button id="loadBtn" class="small" title="Open a draft saved in this browser">SAVED DRAFTS</button>
+          <button id="importBtn" class="small" title="Open a .glfppart or .glfpkt file (Ctrl/Cmd+O)">OPEN FILE</button>
           <input id="importFile" type="file" accept=".glfppart,.glfpkt,.json,application/json,application/x-golfpocket-part,application/x-golfpocket-course" hidden />
           <input id="referenceFile" type="file" accept="image/png,image/jpeg,image/webp,image/gif" hidden />
           <button id="analyseBtn" class="small">ANALYSE</button>
@@ -215,12 +216,13 @@
     </div>
     <div id="libraryDialog" class="ed-dialog-backdrop hidden">
       <div class="ed-dialog ed-library-dialog">
-        <p class="ed-dialog-eyebrow">LOCAL COURSES</p>
-        <h2>Saved courses</h2>
+        <p class="ed-dialog-eyebrow">SAVED DRAFTS</p>
+        <h2>Drafts in this browser</h2>
         <p class="ed-dialog-help">
-          Saves stay in this browser so you can close the editor and come back to
-          a half-finished course. <b>SAVE FILE</b> writes the same work to a
-          <code>.glfppart</code> you can keep anywhere, and <b>OPEN</b> resumes it.
+          <b>SAVE DRAFT</b> keeps a half-finished course in this browser so you can
+          close the editor and come back to it. <b>SAVE FILE</b> writes the same work
+          to a <code>.glfppart</code> you can keep anywhere, and <b>OPEN FILE</b>
+          resumes it.
         </p>
         <div id="savedCourseList" class="ed-saved-list"></div>
         <div class="ed-dialog-actions">
