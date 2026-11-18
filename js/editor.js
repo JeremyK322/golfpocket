@@ -27,6 +27,11 @@ import {
 import { analyseCourse } from "./stableford.js?v=bf5caebb-dirty";
 import * as Store from "./editorStore.js?v=bf5caebb-dirty";
 import { startHolePreview } from "./holePreview.js?v=bf5caebb-dirty";
+import {
+  ANIMALS,
+  ANIMAL_BY_ID,
+  animalAllowed,
+} from "./animals.js?v=bf5caebb-dirty";
 
 const WORLD = C.BASE_WORLD;
 const CELL = 4;
@@ -164,6 +169,17 @@ const TOOLS = {
   },
 };
 
+// Wildlife tools that are not already described above get their title and help
+// from the shared animal catalogue.
+for (const animal of ANIMALS) {
+  if (!TOOLS[animal.id]) {
+    TOOLS[animal.id] = {
+      title: animal.label.toUpperCase(),
+      help: animal.tip,
+    };
+  }
+}
+
 const CHALLENGE_CATALOG = {
   duck: {
     id: "duck",
@@ -190,6 +206,61 @@ const CHALLENGE_CATALOG = {
     label: "SCATTER THE GALAH FLOCK",
     hint: "Land a shot close to a galah flock.",
   },
+  moose: {
+    id: "moose",
+    label: "STARTLE A MOOSE",
+    hint: "Land a shot close to a moose.",
+  },
+  goose: {
+    id: "goose",
+    label: "HONK OFF A GOOSE",
+    hint: "Splash a ball beside a Canada goose.",
+  },
+  raccoon: {
+    id: "raccoon",
+    label: "SPOOK A RACCOON",
+    hint: "Drop a shot beside a raccoon.",
+  },
+  cockatoo: {
+    id: "cockatoo",
+    label: "SCATTER THE COCKATOOS",
+    hint: "Land a shot close to a cockatoo flock.",
+  },
+  wombat: {
+    id: "wombat",
+    label: "SPOOK A WOMBAT",
+    hint: "Drop a shot beside a wombat.",
+  },
+  pelican: {
+    id: "pelican",
+    label: "FLUSH A PELICAN",
+    hint: "Splash a ball beside a pelican.",
+  },
+  gull: {
+    id: "gull",
+    label: "SCATTER THE GULLS",
+    hint: "Land a shot close to a gull flock.",
+  },
+  crab: {
+    id: "crab",
+    label: "SPOOK A CRAB",
+    hint: "Drop a shot beside a crab.",
+  },
+  shorebird: {
+    id: "shorebird",
+    label: "FLUSH THE SHOREBIRDS",
+    hint: "Land a shot close to an oystercatcher.",
+  },
+  seal: {
+    id: "seal",
+    label: "STARTLE A SEAL",
+    hint: "Land a shot close to a seal.",
+  },
+  penguin: {
+    id: "penguin",
+    label: "STARTLE A PENGUIN",
+    hint: "Land a shot close to a penguin.",
+  },
   fairway: {
     id: "fairway",
     label: "FIND THE FAIRWAY",
@@ -207,12 +278,35 @@ const CHALLENGE_CATALOG = {
     requiresTarget: true,
   },
 };
-const CHALLENGE_ORDER_CANADIAN = ["duck", "squirrel", "fairway", "green", "ring"];
+const CHALLENGE_ORDER_CANADIAN = [
+  "duck",
+  "squirrel",
+  "goose",
+  "raccoon",
+  "moose",
+  "fairway",
+  "green",
+  "ring",
+];
 const CHALLENGE_ORDER_AUSTRALIAN = [
   "duck",
   "emu",
   "kangaroo",
   "galah",
+  "cockatoo",
+  "wombat",
+  "pelican",
+  "fairway",
+  "green",
+  "ring",
+];
+const CHALLENGE_ORDER_COASTAL = [
+  "gull",
+  "crab",
+  "shorebird",
+  "seal",
+  "penguin",
+  "pelican",
   "fairway",
   "green",
   "ring",
@@ -221,19 +315,16 @@ function challengeOrder() {
   const env = state.course.environment || "canadian";
   if (env === "all") {
     return [
-      "duck",
-      "squirrel",
-      "emu",
-      "kangaroo",
-      "galah",
-      "fairway",
-      "green",
-      "ring",
+      ...new Set([
+        ...CHALLENGE_ORDER_CANADIAN,
+        ...CHALLENGE_ORDER_AUSTRALIAN,
+        ...CHALLENGE_ORDER_COASTAL,
+      ]),
     ];
   }
-  return env === "australian"
-    ? CHALLENGE_ORDER_AUSTRALIAN
-    : CHALLENGE_ORDER_CANADIAN;
+  if (env === "australian") return CHALLENGE_ORDER_AUSTRALIAN;
+  if (env === "coastal") return CHALLENGE_ORDER_COASTAL;
+  return CHALLENGE_ORDER_CANADIAN;
 }
 
 const $ = (id) => document.getElementById(id);
@@ -368,6 +459,12 @@ const state = {
     emuRadius: 160,
     sealRadius: 100,
     penguinRadius: 80,
+    mooseRadius: 200,
+    gooseRadius: 100,
+    cockatooRadius: 150,
+    pelicanRadius: 120,
+    gullRadius: 160,
+    shorebirdRadius: 90,
     targetType: "water",
     targetRadius: 34,
     targetValue: 1,
@@ -631,24 +728,8 @@ function normaliseHole(raw, index) {
         )
         .filter((route) => route.length >= 2)
     : [];
-  h.deerSpawns = Array.isArray(raw.deerSpawns)
-    ? raw.deerSpawns.map((s) => ({
-        ...pointOf(s),
-        radius: Math.max(30, Number(s.radius) || 150),
-      }))
-    : [];
-  h.rabbitTrees = Array.isArray(raw.rabbitTrees)
-    ? raw.rabbitTrees.map((s) => pointOf(s))
-    : [];
-  h.squirrelTrees = Array.isArray(raw.squirrelTrees)
-    ? raw.squirrelTrees.map((s) => pointOf(s))
-    : [];
-  h.duckPonds = Array.isArray(raw.duckPonds)
-    ? raw.duckPonds.map((s) => ({
-        ...pointOf(s),
-        radius: Math.max(20, Number(s.radius) || 80),
-      }))
-    : [];
+  const holeWildlife = normaliseWildlife(raw);
+  for (const animal of ANIMALS) h[animal.field] = holeWildlife[animal.field];
   return h;
 }
 
@@ -711,10 +792,9 @@ function translateHole(hole, dx, dy) {
     return out;
   });
   hole.cartRoutes = hole.cartRoutes.map((route) => route.map(move));
-  hole.deerSpawns = hole.deerSpawns.map(move);
-  hole.rabbitTrees = hole.rabbitTrees.map(move);
-  hole.squirrelTrees = (hole.squirrelTrees || []).map(move);
-  hole.duckPonds = hole.duckPonds.map(move);
+  for (const animal of ANIMALS) {
+    hole[animal.field] = (hole[animal.field] || []).map(move);
+  }
   hole.extraFairways = (hole.extraFairways || []).map((f) => ({
     ...f,
     points: f.points.map(move),
@@ -755,9 +835,11 @@ function holeExtent(hole) {
   for (const f of hole.flowerBeds) add(f.x, f.y, Math.max(f.rx, f.ry) + 10);
   for (const t of hole.bonusTargets) add(t.x, t.y, t.radius + 20);
   for (const route of hole.cartRoutes) for (const p of route) add(p.x, p.y, 30);
-  for (const s of hole.deerSpawns) add(s.x, s.y, s.radius);
-  for (const s of hole.duckPonds) add(s.x, s.y, s.radius);
-  for (const s of hole.rabbitTrees) add(s.x, s.y, 30);
+  for (const animal of ANIMALS) {
+    for (const marker of hole[animal.field] || []) {
+      add(marker.x, marker.y, animal.spawn ? marker.radius : 30);
+    }
+  }
   if (!Number.isFinite(minX)) return null;
   return { minX, minY, maxX, maxY };
 }
@@ -856,14 +938,41 @@ function normaliseCourse(raw, options = {}) {
       translateHole(hole, offset.x, offset.y);
     });
   }
+  // Packages carry wildlife per hole. Gather it into the course-wide markers
+  // the editor works with, then clear the hole copies.
+  const wildlife = normaliseWildlife(raw.wildlife);
+  const design = isDesign ? { ...raw.design } : designBoundsForHoles(holes);
+  const seenWildlife = new Set();
+  for (const animal of ANIMALS) {
+    for (const marker of wildlife[animal.field]) {
+      seenWildlife.add(
+        `${animal.field}:${Math.round(marker.x)}:${Math.round(marker.y)}:${
+          marker.radius || 0
+        }`
+      );
+    }
+  }
+  for (const hole of holes) {
+    for (const animal of ANIMALS) {
+      for (const marker of hole[animal.field] || []) {
+        const key = `${animal.field}:${Math.round(marker.x)}:${Math.round(
+          marker.y
+        )}:${marker.radius || 0}`;
+        if (seenWildlife.has(key)) continue;
+        seenWildlife.add(key);
+        wildlife[animal.field].push(marker);
+      }
+      hole[animal.field] = [];
+    }
+  }
   return {
     version: 2,
     id: slugify(raw.id || raw.name),
     name: String(raw.name || raw.id || "My Course"),
     theme: raw.theme || "verdant",
     environment: raw.environment || "canadian",
-    design: isDesign ? { ...raw.design } : designBoundsForHoles(holes),
-    wildlife: normaliseWildlife(raw.wildlife),
+    design,
+    wildlife,
     cartRoutes: normaliseCartRoutes(raw.cartRoutes),
     holes,
   };
@@ -871,56 +980,22 @@ function normaliseCourse(raw, options = {}) {
 
 function normaliseWildlife(raw) {
   const source = raw && typeof raw === "object" ? raw : {};
-  return {
-    deerSpawns: Array.isArray(source.deerSpawns)
-      ? source.deerSpawns.map((s) => ({
-          ...pointOf(s),
-          radius: Math.max(30, Number(s.radius) || 150),
-        }))
-      : [],
-    rabbitTrees: Array.isArray(source.rabbitTrees)
-      ? source.rabbitTrees.map((s) => pointOf(s))
-      : [],
-    squirrelTrees: Array.isArray(source.squirrelTrees)
-      ? source.squirrelTrees.map((s) => pointOf(s))
-      : [],
-    duckPonds: Array.isArray(source.duckPonds)
-      ? source.duckPonds.map((s) => ({
-          ...pointOf(s),
-          radius: Math.max(20, Number(s.radius) || 80),
-        }))
-      : [],
-    kangarooSpawns: Array.isArray(source.kangarooSpawns)
-      ? source.kangarooSpawns.map((s) => ({
-          ...pointOf(s),
-          radius: Math.max(40, Number(s.radius) || 180),
-        }))
-      : [],
-    galahFlocks: Array.isArray(source.galahFlocks)
-      ? source.galahFlocks.map((s) => ({
-          ...pointOf(s),
-          radius: Math.max(40, Number(s.radius) || 140),
-        }))
-      : [],
-    emuSpawns: Array.isArray(source.emuSpawns)
-      ? source.emuSpawns.map((s) => ({
-          ...pointOf(s),
-          radius: Math.max(40, Number(s.radius) || 160),
-        }))
-      : [],
-    sealColonies: Array.isArray(source.sealColonies)
-      ? source.sealColonies.map((s) => ({
-          ...pointOf(s),
-          radius: Math.max(30, Number(s.radius) || 100),
-        }))
-      : [],
-    penguinColonies: Array.isArray(source.penguinColonies)
-      ? source.penguinColonies.map((s) => ({
-          ...pointOf(s),
-          radius: Math.max(25, Number(s.radius) || 80),
-        }))
-      : [],
-  };
+  const out = {};
+  for (const animal of ANIMALS) {
+    const list = Array.isArray(source[animal.field]) ? source[animal.field] : [];
+    out[animal.field] = list.map((marker) => {
+      const point = pointOf(marker);
+      if (!animal.spawn) return point;
+      return {
+        ...point,
+        radius: Math.max(
+          animal.spawn.normaliseMin,
+          Number(marker.radius) || animal.spawn.default
+        ),
+      };
+    });
+  }
+  return out;
 }
 
 function normaliseCartRoutes(raw) {
@@ -976,17 +1051,7 @@ function blankCourse(
     theme: "verdant",
     environment,
     design: designBoundsForHoles(holes),
-    wildlife: {
-      deerSpawns: [],
-      rabbitTrees: [],
-      squirrelTrees: [],
-      duckPonds: [],
-      kangarooSpawns: [],
-      galahFlocks: [],
-      emuSpawns: [],
-      sealColonies: [],
-      penguinColonies: [],
-    },
+    wildlife: Object.fromEntries(ANIMALS.map((animal) => [animal.field, []])),
     cartRoutes: [],
     holes,
   };
@@ -1333,16 +1398,11 @@ function renderStats() {
     ["CHALLENGES", hole.challenges.length],
     ["TARGETS", hole.bonusTargets.length],
   ];
-  const wildlife =
-    state.course.wildlife.deerSpawns.length +
-    state.course.wildlife.rabbitTrees.length +
-    (state.course.wildlife.squirrelTrees?.length || 0) +
-    state.course.wildlife.duckPonds.length +
-    (state.course.wildlife.kangarooSpawns?.length || 0) +
-    (state.course.wildlife.galahFlocks?.length || 0) +
-    (state.course.wildlife.emuSpawns?.length || 0) +
-    (state.course.wildlife.sealColonies?.length || 0) +
-    (state.course.wildlife.penguinColonies?.length || 0);
+  const wildlife = ANIMALS.reduce(
+    (total, animal) =>
+      total + (state.course.wildlife[animal.field]?.length || 0),
+    0
+  );
   if (wildlife) stats.push(["WILDLIFE", wildlife]);
   holeStats.innerHTML = stats
     .map(
@@ -1741,64 +1801,20 @@ function validateCourse() {
     }
   });
 
-  state.course.wildlife.deerSpawns.forEach((spawn, i) => {
-    if (
-      !state.course.holes.some((hole) => {
-        const f = holeFrame(hole);
-        return f && frameContains(spawn, f, 0);
-      })
-    ) {
-      add("warn", `Deer spawn ${i + 1} is outside every hole’s export frame and will not appear.`);
-    }
-  });
-  state.course.wildlife.rabbitTrees.forEach((warren, i) => {
-    if (
-      !state.course.holes.some((hole) => {
-        const f = holeFrame(hole);
-        return f && frameContains(warren, f, 0);
-      })
-    ) {
-      add("warn", `Rabbit warren ${i + 1} is outside every hole’s export frame and will not appear.`);
-    }
-  });
-  (state.course.wildlife.squirrelTrees || []).forEach((marker, i) => {
-    if (
-      !state.course.holes.some((hole) => {
-        const f = holeFrame(hole);
-        return f && frameContains(marker, f, 0);
-      })
-    ) {
-      add("warn", `Squirrel marker ${i + 1} is outside every hole’s export frame and will not appear.`);
-    }
-  });
-  state.course.wildlife.duckPonds.forEach((marker, i) => {
-    if (
-      !state.course.holes.some((hole) => {
-        const f = holeFrame(hole);
-        return f && frameContains(marker, f, 0);
-      })
-    ) {
-      add("warn", `Duck marker ${i + 1} is outside every hole’s export frame and will not appear.`);
-    }
-  });
-  const extraWildlife = [
-    ["Kangaroo mob", state.course.wildlife.kangarooSpawns || []],
-    ["Galah flock", state.course.wildlife.galahFlocks || []],
-    ["Emu group", state.course.wildlife.emuSpawns || []],
-    ["Seal colony", state.course.wildlife.sealColonies || []],
-    ["Penguin colony", state.course.wildlife.penguinColonies || []],
-  ];
-  for (const [label, markers] of extraWildlife) {
-    markers.forEach((marker, i) => {
+  for (const animal of ANIMALS) {
+    for (const [i, marker] of (state.course.wildlife[animal.field] || []).entries()) {
       if (
         !state.course.holes.some((hole) => {
           const f = holeFrame(hole);
           return f && frameContains(marker, f, 0);
         })
       ) {
-        add("warn", `${label} ${i + 1} is outside every hole’s export frame and will not appear.`);
+        add(
+          "warn",
+          `${animal.warnLabel} ${i + 1} is outside every hole’s export frame and will not appear.`
+        );
       }
-    });
+    }
   }
   if (holesWithoutChallenges.length) {
     const label =
@@ -1885,6 +1901,17 @@ function renderRouteActions() {
 function currentToolSize() {
   const s = state.settings;
   const hole = currentHole();
+  const animal = ANIMAL_BY_ID[state.tool];
+  if (animal) {
+    if (animal.spawn) {
+      return {
+        label: `${animal.label} area`,
+        kind: "circle",
+        size: (s[animal.spawn.key] || animal.spawn.default) * 2,
+      };
+    }
+    return { label: `${animal.label} marker`, kind: "circle", size: 48 };
+  }
   switch (state.tool) {
     case "fairway":
       return { label: "Fairway width", kind: "band", size: s.fairwayWidth };
@@ -1901,24 +1928,6 @@ function currentToolSize() {
       return { label: "Brush", kind: "circle", size: s.brushRadius * 2 };
     case "tree":
       return { label: "Tree canopy", kind: "circle", size: s.treeRadius * 2 };
-    case "deer":
-      return { label: "Deer zone", kind: "circle", size: s.deerRadius * 2 };
-    case "rabbit":
-      return { label: "Rabbit marker", kind: "circle", size: 48 };
-    case "squirrel":
-      return { label: "Squirrel marker", kind: "circle", size: 48 };
-    case "duck":
-      return { label: "Duck marker", kind: "circle", size: s.duckRadius * 2 };
-    case "kangaroo":
-      return { label: "Kangaroo mob", kind: "circle", size: s.kangarooRadius * 2 };
-    case "galah":
-      return { label: "Galah flock", kind: "circle", size: s.galahRadius * 2 };
-    case "emu":
-      return { label: "Emu group", kind: "circle", size: s.emuRadius * 2 };
-    case "seal":
-      return { label: "Seal colony", kind: "circle", size: s.sealRadius * 2 };
-    case "penguin":
-      return { label: "Penguin colony", kind: "circle", size: s.penguinRadius * 2 };
     case "target":
       return { label: "Bonus ring", kind: "circle", size: s.targetRadius * 2 };
     case "flowers":
@@ -2061,6 +2070,22 @@ function renderToolSettings() {
     </label>`;
 
   let html = "";
+  const animal = ANIMAL_BY_ID[tool];
+  if (animal) {
+    if (animal.spawn) {
+      html += range(
+        animal.spawn.title,
+        animal.spawn.key,
+        animal.spawn.min,
+        animal.spawn.max,
+        animal.spawn.step
+      );
+    }
+    html += `<div class="ed-tip">${animal.tip}</div>`;
+    toolSettings.innerHTML = html;
+    drawSizeGuide();
+    return;
+  }
   switch (tool) {
     case "fairway": {
       const draft = state.fairwayDraft;
@@ -2283,34 +2308,6 @@ function renderToolSettings() {
         <div class="ed-tip">Drag the image to move it, or drag a corner handle to resize. It is a tracing aid and is not exported.</div>`;
       break;
     }
-    case "deer":
-      html += range("SPAWN RADIUS", "deerRadius", 40, 320, 5);
-      html += `<div class="ed-tip">Placed once for the whole course. The family of five deer is spread around this marker in every hole that contains it.</div>`;
-      break;
-    case "duck":
-      html += range("POND MARKER", "duckRadius", 30, 160, 5);
-      html += `<div class="ed-tip">Placed once for the whole course. Ducks use the pond containing this marker in each hole that contains it.</div>`;
-      break;
-    case "kangaroo":
-      html += range("MOB RADIUS", "kangarooRadius", 40, 320, 5);
-      html += `<div class="ed-tip">Placed once for the whole course. A kangaroo mob appears in every hole whose export frame contains the marker.</div>`;
-      break;
-    case "galah":
-      html += range("FLOCK RADIUS", "galahRadius", 40, 280, 5);
-      html += `<div class="ed-tip">Placed once for the whole course. A galah flock appears in every hole whose export frame contains the marker.</div>`;
-      break;
-    case "emu":
-      html += range("GROUP RADIUS", "emuRadius", 40, 320, 5);
-      html += `<div class="ed-tip">Placed once for the whole course. An emu group appears in every hole whose export frame contains the marker.</div>`;
-      break;
-    case "seal":
-      html += range("COLONY RADIUS", "sealRadius", 30, 240, 5);
-      html += `<div class="ed-tip">Placed once for the whole course. Seals appear on every hole whose export frame contains the marker.</div>`;
-      break;
-    case "penguin":
-      html += range("COLONY RADIUS", "penguinRadius", 25, 200, 5);
-      html += `<div class="ed-tip">Placed once for the whole course. Penguins appear on every hole whose export frame contains the marker.</div>`;
-      break;
     case "target":
       html += `
         <label class="ed-setting">
@@ -2379,21 +2376,11 @@ function renderToolSettings() {
 
 function applyThemeToTools() {
   const env = state.course.environment || "canadian";
-  const canadian = env === "canadian" || env === "all";
-  const australian = env === "australian" || env === "all";
   const coastal = env === "coastal" || env === "all";
-  const visibility = {
-    deer: canadian,
-    rabbit: canadian,
-    squirrel: canadian || australian,
-    duck: canadian || australian,
-    kangaroo: australian,
-    galah: australian,
-    emu: australian,
-    ocean: coastal,
-    seal: coastal,
-    penguin: coastal,
-  };
+  const visibility = { ocean: coastal };
+  for (const animal of ANIMALS) {
+    visibility[animal.id] = animalAllowed(animal, env);
+  }
   for (const button of toolbar.querySelectorAll(".tool")) {
     const tool = button.dataset.tool;
     if (tool in visibility) button.style.display = visibility[tool] ? "" : "none";
@@ -3129,119 +3116,23 @@ function addFlowerBed(p) {
   setStatus("Flower bed placed");
 }
 
-function addDeer(p) {
-  ensureAssetSpace(p.x, p.y, state.settings.deerRadius);
+function addWildlife(p, animal) {
+  const radius = animal.spawn
+    ? state.settings[animal.spawn.key] || animal.spawn.default
+    : 0;
+  ensureAssetSpace(p.x, p.y, animal.spawn ? radius : 30);
   editHole(() => {
-    state.course.wildlife.deerSpawns.push({
-      x: Math.round(p.x),
-      y: Math.round(p.y),
-      radius: state.settings.deerRadius,
-    });
-  });
-  setStatus("Deer spawn added to the whole course");
-}
-
-function addRabbit(p) {
-  ensureAssetSpace(p.x, p.y, 40);
-  editHole(() => {
-    state.course.wildlife.rabbitTrees.push({
-      x: Math.round(p.x),
-      y: Math.round(p.y),
-    });
-  });
-  setStatus("Rabbit warren added to the whole course");
-}
-
-function addSquirrel(p) {
-  ensureAssetSpace(p.x, p.y, 30);
-  editHole(() => {
-    if (!Array.isArray(state.course.wildlife.squirrelTrees)) {
-      state.course.wildlife.squirrelTrees = [];
+    if (!Array.isArray(state.course.wildlife[animal.field])) {
+      state.course.wildlife[animal.field] = [];
     }
-    state.course.wildlife.squirrelTrees.push({
+    const marker = {
       x: Math.round(p.x),
       y: Math.round(p.y),
-    });
+    };
+    if (animal.spawn) marker.radius = radius;
+    state.course.wildlife[animal.field].push(marker);
   });
-  setStatus("Squirrel marker added to the whole course");
-}
-
-function addDuck(p) {
-  ensureAssetSpace(p.x, p.y, state.settings.duckRadius);
-  editHole(() => {
-    state.course.wildlife.duckPonds.push({
-      x: Math.round(p.x),
-      y: Math.round(p.y),
-      radius: state.settings.duckRadius,
-    });
-  });
-  setStatus("Duck pond marker added to the whole course");
-}
-
-function addKangaroo(p) {
-  ensureAssetSpace(p.x, p.y, state.settings.kangarooRadius);
-  editHole(() => {
-    state.course.wildlife.kangarooSpawns.push({
-      x: Math.round(p.x),
-      y: Math.round(p.y),
-      radius: state.settings.kangarooRadius,
-    });
-  });
-  setStatus("Kangaroo mob added to the whole course");
-}
-
-function addGalah(p) {
-  ensureAssetSpace(p.x, p.y, state.settings.galahRadius);
-  editHole(() => {
-    state.course.wildlife.galahFlocks.push({
-      x: Math.round(p.x),
-      y: Math.round(p.y),
-      radius: state.settings.galahRadius,
-    });
-  });
-  setStatus("Galah flock added to the whole course");
-}
-
-function addEmu(p) {
-  ensureAssetSpace(p.x, p.y, state.settings.emuRadius);
-  editHole(() => {
-    state.course.wildlife.emuSpawns.push({
-      x: Math.round(p.x),
-      y: Math.round(p.y),
-      radius: state.settings.emuRadius,
-    });
-  });
-  setStatus("Emu group added to the whole course");
-}
-
-function addSeal(p) {
-  ensureAssetSpace(p.x, p.y, state.settings.sealRadius);
-  editHole(() => {
-    if (!Array.isArray(state.course.wildlife.sealColonies)) {
-      state.course.wildlife.sealColonies = [];
-    }
-    state.course.wildlife.sealColonies.push({
-      x: Math.round(p.x),
-      y: Math.round(p.y),
-      radius: state.settings.sealRadius,
-    });
-  });
-  setStatus("Seal colony added to the whole course");
-}
-
-function addPenguin(p) {
-  ensureAssetSpace(p.x, p.y, state.settings.penguinRadius);
-  editHole(() => {
-    if (!Array.isArray(state.course.wildlife.penguinColonies)) {
-      state.course.wildlife.penguinColonies = [];
-    }
-    state.course.wildlife.penguinColonies.push({
-      x: Math.round(p.x),
-      y: Math.round(p.y),
-      radius: state.settings.penguinRadius,
-    });
-  });
-  setStatus("Penguin colony added to the whole course");
+  setStatus(`${animal.warnLabel} added to the whole course`);
 }
 
 function nextBonusId(hole) {
@@ -3470,33 +3361,19 @@ function eraseAt(p, options = {}) {
   });
 
   const wildlife = state.course.wildlife;
-  wildlife.deerSpawns.forEach((s, i) =>
-    consider("deer", null, i, Math.hypot(p.x - s.x, p.y - s.y), 30, Infinity, 0)
-  );
-  wildlife.rabbitTrees.forEach((s, i) =>
-    consider("rabbit", null, i, Math.hypot(p.x - s.x, p.y - s.y), 26, Infinity, 0)
-  );
-  (wildlife.squirrelTrees || []).forEach((s, i) =>
-    consider("squirrel", null, i, Math.hypot(p.x - s.x, p.y - s.y), 26, Infinity, 0)
-  );
-  wildlife.duckPonds.forEach((s, i) =>
-    consider("duck", null, i, Math.hypot(p.x - s.x, p.y - s.y), 30, Infinity, 0)
-  );
-  (wildlife.kangarooSpawns || []).forEach((s, i) =>
-    consider("kangaroo", null, i, Math.hypot(p.x - s.x, p.y - s.y), 32, Infinity, 0)
-  );
-  (wildlife.galahFlocks || []).forEach((s, i) =>
-    consider("galah", null, i, Math.hypot(p.x - s.x, p.y - s.y), 32, Infinity, 0)
-  );
-  (wildlife.emuSpawns || []).forEach((s, i) =>
-    consider("emu", null, i, Math.hypot(p.x - s.x, p.y - s.y), 32, Infinity, 0)
-  );
-  (wildlife.sealColonies || []).forEach((s, i) =>
-    consider("seal", null, i, Math.hypot(p.x - s.x, p.y - s.y), 32, Infinity, 0)
-  );
-  (wildlife.penguinColonies || []).forEach((s, i) =>
-    consider("penguin", null, i, Math.hypot(p.x - s.x, p.y - s.y), 32, Infinity, 0)
-  );
+  for (const animal of ANIMALS) {
+    (wildlife[animal.field] || []).forEach((marker, i) =>
+      consider(
+        animal.id,
+        null,
+        i,
+        Math.hypot(p.x - marker.x, p.y - marker.y),
+        animal.pickRadius || (animal.spawn ? 30 : 26),
+        Infinity,
+        0
+      )
+    );
+  }
   state.course.cartRoutes.forEach((route, i) => {
     const pts = route.map((q) => [q.x, q.y]);
     const d = distanceToPolyline(p.x, p.y, pts);
@@ -3536,6 +3413,7 @@ function eraseAt(p, options = {}) {
     ocean: "Ocean",
     sand: "Sand",
   };
+  for (const animal of ANIMALS) labels[animal.id] = animal.warnLabel;
   editHole(() => {
     const target = best.holeIndex == null ? null : state.course.holes[best.holeIndex];
     if (target) {
@@ -3557,15 +3435,10 @@ function eraseAt(p, options = {}) {
       if (best.kind === "road") target.roads.splice(best.index, 1);
       if (best.kind === "flowers") target.flowerBeds.splice(best.index, 1);
     }
-    if (best.kind === "deer") state.course.wildlife.deerSpawns.splice(best.index, 1);
-    if (best.kind === "rabbit") state.course.wildlife.rabbitTrees.splice(best.index, 1);
-    if (best.kind === "squirrel") state.course.wildlife.squirrelTrees?.splice(best.index, 1);
-    if (best.kind === "duck") state.course.wildlife.duckPonds.splice(best.index, 1);
-    if (best.kind === "kangaroo") state.course.wildlife.kangarooSpawns?.splice(best.index, 1);
-    if (best.kind === "galah") state.course.wildlife.galahFlocks?.splice(best.index, 1);
-    if (best.kind === "emu") state.course.wildlife.emuSpawns?.splice(best.index, 1);
-    if (best.kind === "seal") state.course.wildlife.sealColonies?.splice(best.index, 1);
-    if (best.kind === "penguin") state.course.wildlife.penguinColonies?.splice(best.index, 1);
+    const erasedAnimal = ANIMAL_BY_ID[best.kind];
+    if (erasedAnimal) {
+      state.course.wildlife[erasedAnimal.field]?.splice(best.index, 1);
+    }
     if (best.kind === "route") {
       state.course.cartRoutes.splice(best.index, 1);
       state.selectedRoute = -1;
@@ -3723,12 +3596,7 @@ function drawHoleDesign(hole, active) {
     ctx.fill();
   }
 
-  // Sand then water on top.
-  for (const poly of hole.sandPolys) {
-    traceWorldPoly(poly);
-    ctx.fillStyle = active ? "#e8d29a" : "#b9aa80";
-    ctx.fill();
-  }
+  // Ocean sits below the land layers.
   for (const poly of hole.oceanPolys || []) {
     traceWorldPoly(poly);
     ctx.fillStyle = active ? "#1f6e91" : "#245f78";
@@ -3736,6 +3604,12 @@ function drawHoleDesign(hole, active) {
     ctx.strokeStyle = active ? "rgba(185, 240, 245, 0.55)" : "rgba(160,210,215,0.4)";
     ctx.lineWidth = 6;
     ctx.stroke();
+  }
+  // Sand then water on top.
+  for (const poly of hole.sandPolys) {
+    traceWorldPoly(poly);
+    ctx.fillStyle = active ? "#e8d29a" : "#b9aa80";
+    ctx.fill();
   }
   for (const poly of hole.waterPolys) {
     traceWorldPoly(poly);
@@ -4233,32 +4107,13 @@ function drawOverlays() {
     ctx.fillText(label, s.x, s.y);
   };
   const wildlife = state.course.wildlife;
-  for (const s of wildlife.deerSpawns) {
-    marker(s.x, s.y, s.radius, { fill: "rgba(185,227,91,0.1)", line: "rgba(185,227,91,0.7)", text: "#d8ee9c" }, "DEER");
-  }
-  for (const s of wildlife.rabbitTrees) {
-    marker(s.x, s.y, 24, { fill: "rgba(230,180,255,0.12)", line: "rgba(230,180,255,0.8)", text: "#eed3ff" }, "R");
-  }
-  for (const s of wildlife.squirrelTrees || []) {
-    marker(s.x, s.y, 24, { fill: "rgba(255,196,110,0.12)", line: "rgba(255,196,110,0.8)", text: "#ffe1b5" }, "S");
-  }
-  for (const s of wildlife.duckPonds) {
-    marker(s.x, s.y, s.radius, { fill: "rgba(123,215,232,0.1)", line: "rgba(123,215,232,0.7)", text: "#bdeef8" }, "DUCK");
-  }
-  for (const s of wildlife.kangarooSpawns || []) {
-    marker(s.x, s.y, s.radius, { fill: "rgba(214,166,96,0.12)", line: "rgba(214,166,96,0.8)", text: "#f0d0a4" }, "ROO");
-  }
-  for (const s of wildlife.galahFlocks || []) {
-    marker(s.x, s.y, s.radius, { fill: "rgba(247,158,190,0.12)", line: "rgba(247,158,190,0.8)", text: "#ffd0e0" }, "GALAH");
-  }
-  for (const s of wildlife.emuSpawns || []) {
-    marker(s.x, s.y, s.radius, { fill: "rgba(176,160,140,0.12)", line: "rgba(200,185,160,0.8)", text: "#e2d6c1" }, "EMU");
-  }
-  for (const s of wildlife.sealColonies || []) {
-    marker(s.x, s.y, s.radius, { fill: "rgba(140,180,200,0.12)", line: "rgba(150,195,215,0.8)", text: "#c8e4ef" }, "SEAL");
-  }
-  for (const s of wildlife.penguinColonies || []) {
-    marker(s.x, s.y, s.radius, { fill: "rgba(220,220,235,0.12)", line: "rgba(190,195,220,0.8)", text: "#e2e5f2" }, "PENGUIN");
+  for (const animal of ANIMALS) {
+    for (const s of wildlife[animal.field] || []) {
+      const radius = animal.spawn
+        ? s.radius || animal.spawn.default
+        : 24;
+      marker(s.x, s.y, radius, animal.marker, animal.marker.short);
+    }
   }
 
   // Bonus rings and their safe drop points.
@@ -4511,7 +4366,8 @@ function drawSizeGhost(p) {
     tee: "#fdf6e3",
     pin: "#ff6b57",
   };
-  const colour = colours[tool] || "#fdf6e3";
+  const colour =
+    colours[tool] || ANIMAL_BY_ID[tool]?.marker.line || "#fdf6e3";
   ctx.save();
   ctx.strokeStyle = colour;
   ctx.fillStyle = `${colour}33`;
@@ -5010,33 +4866,6 @@ function onPointerDown(event) {
     case "flowers":
       addFlowerBed(p);
       break;
-    case "deer":
-      addDeer(p);
-      break;
-    case "rabbit":
-      addRabbit(p);
-      break;
-    case "squirrel":
-      addSquirrel(p);
-      break;
-    case "duck":
-      addDuck(p);
-      break;
-    case "kangaroo":
-      addKangaroo(p);
-      break;
-    case "galah":
-      addGalah(p);
-      break;
-    case "emu":
-      addEmu(p);
-      break;
-    case "seal":
-      addSeal(p);
-      break;
-    case "penguin":
-      addPenguin(p);
-      break;
     case "target":
       addBonusTarget(p);
       break;
@@ -5045,6 +4874,11 @@ function onPointerDown(event) {
       canvas.style.cursor = "crosshair";
       eraseAt(p);
       break;
+    default: {
+      const animal = ANIMAL_BY_ID[state.tool];
+      if (animal) addWildlife(p, animal);
+      break;
+    }
   }
   updateHint();
 }
@@ -5535,12 +5369,6 @@ function cutHole(hole, index, allHoles, course) {
       return item;
     }),
     cartRoutes: [],
-    deerSpawns: [],
-    rabbitTrees: [],
-    squirrelTrees: [],
-    duckPonds: [],
-    sealColonies: [],
-    penguinColonies: [],
     extraFairways: (hole.extraFairways || []).map((f) => ({
       ...f,
       points: f.points.map((p) => ({ ...move(p), w: p.w })),
@@ -5559,44 +5387,12 @@ function cutHole(hole, index, allHoles, course) {
     })),
   };
 
-  const wildlife = (course && course.wildlife) || {
-    deerSpawns: [],
-    rabbitTrees: [],
-    squirrelTrees: [],
-    duckPonds: [],
-    kangarooSpawns: [],
-    galahFlocks: [],
-    emuSpawns: [],
-    sealColonies: [],
-    penguinColonies: [],
-  };
-  out.deerSpawns = (wildlife.deerSpawns || [])
-    .filter((s) => frameContains(s, f, 0))
-    .map((s) => ({ ...s, ...move(s) }));
-  out.rabbitTrees = (wildlife.rabbitTrees || [])
-    .filter((s) => frameContains(s, f, 0))
-    .map((s) => move(s));
-  out.squirrelTrees = (wildlife.squirrelTrees || [])
-    .filter((s) => frameContains(s, f, 0))
-    .map((s) => move(s));
-  out.duckPonds = (wildlife.duckPonds || [])
-    .filter((s) => frameContains(s, f, 0))
-    .map((s) => ({ ...s, ...move(s) }));
-  out.kangarooSpawns = (wildlife.kangarooSpawns || [])
-    .filter((s) => frameContains(s, f, 0))
-    .map((s) => ({ ...s, ...move(s) }));
-  out.galahFlocks = (wildlife.galahFlocks || [])
-    .filter((s) => frameContains(s, f, 0))
-    .map((s) => ({ ...s, ...move(s) }));
-  out.emuSpawns = (wildlife.emuSpawns || [])
-    .filter((s) => frameContains(s, f, 0))
-    .map((s) => ({ ...s, ...move(s) }));
-  out.sealColonies = (wildlife.sealColonies || [])
-    .filter((s) => frameContains(s, f, 0))
-    .map((s) => ({ ...s, ...move(s) }));
-  out.penguinColonies = (wildlife.penguinColonies || [])
-    .filter((s) => frameContains(s, f, 0))
-    .map((s) => ({ ...s, ...move(s) }));
+  const wildlife = (course && course.wildlife) || {};
+  for (const animal of ANIMALS) {
+    out[animal.field] = (wildlife[animal.field] || [])
+      .filter((s) => frameContains(s, f, 0))
+      .map((s) => ({ ...s, ...move(s) }));
+  }
   for (const route of (course && course.cartRoutes) || []) {
     for (const run of clipRouteToFrame(route, f)) {
       out.cartRoutes.push(run);
@@ -5926,9 +5722,9 @@ function renderCourseMapImage(selectedBounds = null) {
     state.panX = saved.panX;
     state.panY = saved.panY;
   }
-  let url = mapCanvas.toDataURL("image/webp", 0.82);
+  let url = mapCanvas.toDataURL("image/webp", 0.95);
   if (!url.startsWith("data:image/webp")) {
-    url = mapCanvas.toDataURL("image/jpeg", 0.86);
+    url = mapCanvas.toDataURL("image/jpeg", 0.9);
   }
   return url;
 }
@@ -6018,6 +5814,15 @@ function exportCourse() {
         emuSpawns: cut.emuSpawns.map((s) => ({ ...s, x: round1(s.x), y: round1(s.y), radius: round1(s.radius) })),
         sealColonies: cut.sealColonies.map((s) => ({ ...s, x: round1(s.x), y: round1(s.y), radius: round1(s.radius) })),
         penguinColonies: cut.penguinColonies.map((s) => ({ ...s, x: round1(s.x), y: round1(s.y), radius: round1(s.radius) })),
+        mooseSpawns: cut.mooseSpawns.map((s) => ({ ...s, x: round1(s.x), y: round1(s.y), radius: round1(s.radius) })),
+        goosePonds: cut.goosePonds.map((s) => ({ ...s, x: round1(s.x), y: round1(s.y), radius: round1(s.radius) })),
+        raccoonMarkers: cut.raccoonMarkers.map(roundPoint),
+        cockatooFlocks: cut.cockatooFlocks.map((s) => ({ ...s, x: round1(s.x), y: round1(s.y), radius: round1(s.radius) })),
+        wombatMarkers: cut.wombatMarkers.map(roundPoint),
+        pelicanPonds: cut.pelicanPonds.map((s) => ({ ...s, x: round1(s.x), y: round1(s.y), radius: round1(s.radius) })),
+        gullFlocks: cut.gullFlocks.map((s) => ({ ...s, x: round1(s.x), y: round1(s.y), radius: round1(s.radius) })),
+        crabMarkers: cut.crabMarkers.map(roundPoint),
+        shorebirdSpawns: cut.shorebirdSpawns.map((s) => ({ ...s, x: round1(s.x), y: round1(s.y), radius: round1(s.radius) })),
         extraFairways: cut.extraFairways.map((f) => ({ hole: f.hole, points: roundFairway(f.points) })),
         extraGreens: cut.extraGreens.map((g) => ({
           ...g,

@@ -15,16 +15,20 @@ import {
 import { drawScenery } from "./scenery.js?v=bf5caebb-dirty";
 import { circleUnionPath, mulberry32, pointInPoly, rr, TAU } from "./util.js";
 
-function makeNoiseTile(rng, size, colors, count) {
+function makeNoiseTexture(rng, width, height, colors, density) {
+  const w = Math.max(1, Math.round(width));
+  const h = Math.max(1, Math.round(height));
   const c = document.createElement("canvas");
-  c.width = size;
-  c.height = size;
+  c.width = w;
+  c.height = h;
   const x = c.getContext("2d");
+  if (!x) return c;
+  const count = Math.max(1, Math.round(w * h * density));
   for (let i = 0; i < count; i++) {
     x.fillStyle = colors[(rng() * colors.length) | 0];
     x.globalAlpha = rr(rng, 0.2, 0.85);
     const s = rng() < 0.85 ? 1 : 2;
-    x.fillRect((rng() * size) | 0, (rng() * size) | 0, s, s);
+    x.fillRect((rng() * w) | 0, (rng() * h) | 0, s, s);
   }
   return c;
 }
@@ -530,12 +534,22 @@ export function paintCourse(themeId = "verdant", options = {}) {
     ctx.stroke();
   }
 
-  // Finer noise overlay.
-  const fineNoise = ctx.createPattern(makeNoiseTile(rng, 96, ["#ffffff", "#000000", "#77a84c"], 900), "repeat");
+  // Finer noise overlay. A single stretched texture instead of a repeating
+  // tile: a small tile shows up as a grid when the course is downscaled for
+  // the minimap or the exported map.
+  const noisePixels = Math.min(900000, Math.max(180000, area * 0.18));
+  const noiseScale = Math.sqrt(noisePixels / area);
+  const fineNoise = makeNoiseTexture(
+    rng,
+    WORLD.w * noiseScale,
+    WORLD.h * noiseScale,
+    ["#ffffff", "#000000", "#77a84c"],
+    0.05
+  );
   ctx.save();
   ctx.globalAlpha = 0.06;
-  ctx.fillStyle = fineNoise;
-  ctx.fillRect(0, 0, WORLD.w, WORLD.h);
+  ctx.imageSmoothingEnabled = true;
+  ctx.drawImage(fineNoise, 0, 0, WORLD.w, WORLD.h);
   ctx.restore();
 
   // Little wildflowers in the rough.
@@ -588,8 +602,8 @@ export function paintCourse(themeId = "verdant", options = {}) {
     }
     ctx.stroke();
     ctx.globalAlpha = 0.05;
-    ctx.fillStyle = fineNoise;
-    ctx.fillRect(0, 0, WORLD.w, WORLD.h);
+    ctx.imageSmoothingEnabled = true;
+    ctx.drawImage(fineNoise, 0, 0, WORLD.w, WORLD.h);
     ctx.restore();
   }
 
@@ -727,15 +741,17 @@ export function paintCourse(themeId = "verdant", options = {}) {
     ctx.restore();
   }
 
+  // Ocean sits below the land layers: sand beaches, greens and scenery all
+  // paint over it. Ponds are drawn last so they can sit on top of the shore.
+  for (const poly of HOLE.oceanPolys || []) {
+    paintOceanBody(ctx, poly, rng);
+  }
+
   // Vector sand shapes (editor courses).
   for (const poly of HOLE.sandPolys || []) {
     paintSandBody(ctx, poly, rng);
   }
 
-  // Ocean first, then ponds on top where they meet.
-  for (const poly of HOLE.oceanPolys || []) {
-    paintOceanBody(ctx, poly, rng);
-  }
   // Water bodies (legacy pond or editor polygons).
   for (const poly of HOLE.waterPolys || []) {
     paintWaterBody(ctx, poly, rng);
