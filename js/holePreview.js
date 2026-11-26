@@ -12,6 +12,7 @@ import { paintCourse } from "./paint.js?v=bf5caebb-dirty";
 import { ShoreWaves } from "./waves.js?v=bf5caebb-dirty";
 import { drawFlag, drawTree } from "./holeArt.js?v=bf5caebb-dirty";
 import { drawThemeGrade, ThemeLife } from "./themeFx.js?v=bf5caebb-dirty";
+import { TAU } from "./util.js";
 
 const MIN_FRAME_MS = 1000 / 30;
 
@@ -32,12 +33,20 @@ function paintGround(theme) {
  * @param {{ hole: object, theme?: string, environment?: string }} options
  * @returns {{ stop: () => void }}
  */
-export function startHolePreview(canvas, { hole, theme = "verdant", environment = "canadian" }) {
+export function startHolePreview(canvas, {
+  hole,
+  theme = "verdant",
+  environment = "canadian",
+  mode = "round",
+  targetRun = null,
+}) {
   loadCourseData({
     id: "preview",
     name: "Preview",
     theme,
     environment,
+    mode,
+    targetRun,
     holes: [hole],
   });
   setHole(0);
@@ -95,7 +104,30 @@ export function startHolePreview(canvas, { hole, theme = "verdant", environment 
     for (const entry of trees) {
       drawTree(ctx, entry.tree, entry.index, { time, wind: WIND.mps });
     }
-    drawFlag(ctx, HOLE.pin, time, WIND.mps);
+    if (mode === "target") {
+      const targets = (HOLE.bonusTargets || []).filter(
+        (t) => t.type === "ground"
+      );
+      for (let i = 0; i < targets.length; i++) {
+        const target = targets[i];
+        const radius = Math.max(10, Number(target.radius) || 34);
+        const pulse = 0.5 + 0.5 * Math.sin(time * 2.4 + i);
+        ctx.save();
+        ctx.strokeStyle = `rgba(255, 216, 74, ${0.62 + pulse * 0.3})`;
+        ctx.lineWidth = 3;
+        ctx.beginPath();
+        ctx.arc(target.x, target.y, radius, 0, TAU);
+        ctx.stroke();
+        ctx.strokeStyle = "rgba(255, 250, 210, 0.7)";
+        ctx.lineWidth = 1.2;
+        ctx.beginPath();
+        ctx.arc(target.x, target.y, radius - 4, 0, TAU);
+        ctx.stroke();
+        ctx.restore();
+      }
+    } else {
+      drawFlag(ctx, HOLE.pin, time, WIND.mps);
+    }
     try {
       waves.draw(ctx, time, false);
     } catch (err) {

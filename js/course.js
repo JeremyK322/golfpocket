@@ -2,6 +2,7 @@
 import {
   TAU,
   closedSplinePoints,
+  distanceToPoly,
   distanceToPolyline,
   inEllipse,
   pointInPoly,
@@ -11,6 +12,13 @@ import {
 export const WORLD = { w: 1700, h: 2350 };
 export const BASE_WORLD = { w: 1700, h: 2350 };
 export const PX_PER_METRE = 3.94;
+
+// Painted edge widths (px). Shared by the painter, the editor preview and the
+// surface tests so the fringe always plays the way it looks.
+export const FAIRWAY_FRINGE = 36;
+export const FAIRWAY_POLY_FRINGE = 24;
+export const GREEN_COLLAR = 60;
+export const GREEN_POLY_COLLAR = 30;
 
 export function worldForHole(hole) {
   const world = hole && hole.world;
@@ -41,7 +49,13 @@ const EMPTY_HOLE = {
   cartRoutes: [],
 };
 
-export let COURSE = { id: "verdant-links", name: "Verdant Links", theme: "verdant" };
+export let COURSE = {
+  id: "verdant-links",
+  name: "Verdant Links",
+  theme: "verdant",
+  mode: "round",
+  targetRun: null,
+};
 export let HOLES = [];
 export let HOLE = EMPTY_HOLE;
 export let HOLE_INDEX = 0;
@@ -300,6 +314,8 @@ export function loadCourseData(data) {
     theme: data.theme || "verdant",
     environment: data.environment || "canadian",
     analysis: data.analysis || null,
+    mode: data.mode === "target" ? "target" : "round",
+    targetRun: data.targetRun && typeof data.targetRun === "object" ? data.targetRun : null,
   };
   HOLES = data.holes.map(normaliseHole);
   HOLE_INDEX = 0;
@@ -362,6 +378,17 @@ export function surfaceAt(x, y) {
   for (const poly of HOLE.greenPolys || []) {
     if (poly.length > 2 && pointInPoly(x, y, poly)) return "green";
   }
+
+  // The collar around a green is painted as apron but plays as fairway.
+  for (const green of GREENS) {
+    if (inEllipse(x, y, green, GREEN_COLLAR)) return "fairway";
+  }
+  for (const poly of HOLE.greenPolys || []) {
+    if (poly.length > 2 && distanceToPoly(x, y, poly) <= GREEN_POLY_COLLAR) {
+      return "fairway";
+    }
+  }
+
   for (const poly of HOLE.fairwayPolys || []) {
     if (poly.length > 2 && pointInPoly(x, y, poly)) return "fairway";
   }
@@ -373,6 +400,23 @@ export function surfaceAt(x, y) {
       return "fairway";
     }
   }
+
+  // Fringe is the widened painted edge around the fairway: half the rough
+  // penalty, but still a distinct lie.
+  for (const poly of HOLE.fairwayPolys || []) {
+    if (poly.length > 2 && distanceToPoly(x, y, poly) <= FAIRWAY_POLY_FRINGE) {
+      return "fringe";
+    }
+  }
+  for (const track of FAIRWAY_TRACKS) {
+    if (
+      track.line.length &&
+      distanceToPolyline(x, y, track.line) <
+        fairwayWidthAt(track, x, y) + FAIRWAY_FRINGE
+    ) {
+      return "fringe";
+    }
+  }
   return "rough";
 }
 
@@ -380,6 +424,17 @@ export function isOnGreen(x, y) {
   if (GREENS.some((green) => inEllipse(x, y, green, -6))) return true;
   return (HOLE.greenPolys || []).some(
     (poly) => poly.length > 2 && pointInPoly(x, y, poly)
+  );
+}
+
+// Green plus its painted collar. Used to suggest the putter from the apron;
+// the collar itself still plays as a fairway lie.
+export function isOnGreenOrCollar(x, y) {
+  if (GREENS.some((green) => inEllipse(x, y, green, GREEN_COLLAR))) return true;
+  return (HOLE.greenPolys || []).some(
+    (poly) =>
+      poly.length > 2 &&
+      (pointInPoly(x, y, poly) || distanceToPoly(x, y, poly) <= GREEN_POLY_COLLAR)
   );
 }
 
@@ -402,6 +457,8 @@ export function lieAt(x, y) {
     return { kind: "sand", mult: 0.55, spread: 1.5, label: "BUNKER · −45% CARRY" };
   if (treeAt(x, y))
     return { kind: "trees", mult: 0.5, spread: 1.8, label: "IN TREES · −50% CARRY" };
+  if (s === "fringe")
+    return { kind: "fringe", mult: 0.91, spread: 1.15, label: "FRINGE · −9% CARRY" };
   if (s === "rough")
     return { kind: "rough", mult: 0.82, spread: 1.3, label: "ROUGH · −18% CARRY" };
   return { kind: s, mult: 1, spread: 1, label: "" };

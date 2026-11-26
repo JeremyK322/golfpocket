@@ -8,7 +8,7 @@ import { NPC_PROFILES, npcHandicapIndex } from "./npcs.js?v=bf5caebb-dirty";
 import { approxNormal, clamp, mulberry32 } from "./util.js";
 
 export const PX_PER_METRE = 3.94;
-export const MIN_HANDICAP = -5;
+export const MIN_HANDICAP = -20;
 export const MAX_HANDICAP = 54;
 export const DEFAULT_HANDICAP = 18.0;
 
@@ -571,6 +571,7 @@ export function simulateProfileScores(profile, analysis, options = {}) {
 
 export function computeHandicapIndex(history, getCourseProfile) {
   const rounds = (Array.isArray(history) ? history : [])
+    .filter((row) => row && row.mode !== "variant")
     .slice(0, 10)
     .map((row) => {
       const holes = Math.max(1, Number(row.holes) || 18);
@@ -604,17 +605,19 @@ export function courseHandicap(index, analysis, tierKey) {
   const scaled = (Number(index) || 0) * (holes / 18);
   const handicap =
     scaled * (slope / 113) + (rating + tier.ratingShift - par);
-  return Math.round(clamp(handicap, 0, MAX_HANDICAP));
+  return Math.round(clamp(handicap, MIN_HANDICAP, MAX_HANDICAP));
 }
 
 export function allocateHandicapStrokes(handicap, analysis) {
   const metrics = analysis?.holeMetrics || [];
   const holes = Math.max(1, metrics.length);
-  const value = Math.max(0, Number(handicap) || 0);
-  const base = Math.floor(value / holes);
-  const remainder = value % holes;
+  const value = Number(handicap) || 0;
+  const sign = value < 0 ? -1 : 1;
+  const magnitude = Math.abs(value);
+  const base = Math.floor(magnitude / holes) * sign;
+  const remainder = magnitude % holes;
   return metrics.map((metric) => {
-    const extra = metric.strokeIndex <= remainder ? 1 : 0;
+    const extra = metric.strokeIndex <= remainder ? sign : 0;
     return base + extra;
   });
 }

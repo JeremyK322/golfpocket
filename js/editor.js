@@ -4,6 +4,7 @@ import * as C from "./course.js?v=bf5caebb-dirty";
 import {
   clamp,
   closedSplinePoints,
+  distanceToPoly,
   distanceToPolyline,
   circleUnionPath,
   inEllipse,
@@ -27,11 +28,13 @@ import {
 import { analyseCourse } from "./stableford.js?v=bf5caebb-dirty";
 import * as Store from "./editorStore.js?v=bf5caebb-dirty";
 import { startHolePreview } from "./holePreview.js?v=bf5caebb-dirty";
+import { startTargetPlayer, sampleTargetRun } from "./targetPlayer.js?v=bf5caebb-dirty";
 import {
   ANIMALS,
   ANIMAL_BY_ID,
   animalAllowed,
 } from "./animals.js?v=bf5caebb-dirty";
+import { initEditorTour } from "./editorTour.js?v=bf5caebb-dirty";
 
 const WORLD = C.BASE_WORLD;
 const CELL = 4;
@@ -353,6 +356,8 @@ const courseForm = $("courseForm");
 const setupNameInput = $("setupName");
 const setupIdInput = $("setupId");
 const setupEnvironmentSelect = $("setupEnvironment");
+const setupModeSelect = $("setupMode");
+const setupHolesField = $("setupHolesField");
 const setupCountsEl = $("setupCounts");
 const setupNoteEl = $("setupNote");
 const courseDialogModeEl = $("courseDialogMode");
@@ -971,6 +976,11 @@ function normaliseCourse(raw, options = {}) {
     name: String(raw.name || raw.id || "My Course"),
     theme: raw.theme || "verdant",
     environment: raw.environment || "canadian",
+    mode: raw.mode === "target" ? "target" : "round",
+    targetRun:
+      raw.targetRun && typeof raw.targetRun === "object"
+        ? JSON.parse(JSON.stringify(raw.targetRun))
+        : null,
     design,
     wildlife,
     cartRoutes: normaliseCartRoutes(raw.cartRoutes),
@@ -1050,6 +1060,68 @@ function blankCourse(
     name: String(name || "My Course"),
     theme: "verdant",
     environment,
+    mode: "round",
+    targetRun: null,
+    design: designBoundsForHoles(holes),
+    wildlife: Object.fromEntries(ANIMALS.map((animal) => [animal.field, []])),
+    cartRoutes: [],
+    holes,
+  };
+}
+
+function blankTargetCourse(
+  name = "Target Run",
+  id = "target-run",
+  environment = "coastal"
+) {
+  const specs = [
+    { teeY: 2400, targetY: 1900 },
+    { teeY: 1500, targetY: 1000 },
+    { teeY: 600, targetY: 100 },
+  ];
+  const holes = specs.map((spec, i) =>
+    normaliseHole(
+      {
+        name: `Target ${i + 1}`,
+        par: 1,
+        tee: { x: 850, y: spec.teeY, rot: 0 },
+        pin: { x: 850, y: spec.targetY },
+        green: null,
+        fairway: [],
+        fairwayPolys: [],
+        greenPolys: [],
+        waterPolys: [],
+        oceanPolys: [],
+        sandPolys: [],
+        trees: [],
+        props: [],
+        roads: [],
+        flowerBeds: [],
+        bonusTargets: [
+          {
+            id: `target-${i + 1}`,
+            label: `TARGET ${i + 1}`,
+            value: -1,
+            x: 850,
+            y: spec.targetY,
+            radius: 70,
+            type: "ground",
+          },
+        ],
+        challenges: [],
+        cartRoutes: [],
+      },
+      i
+    )
+  );
+  return {
+    version: 2,
+    id: slugify(id || name),
+    name: String(name || "Target Run"),
+    theme: "verdant",
+    environment,
+    mode: "target",
+    targetRun: { balls: 30 },
     design: designBoundsForHoles(holes),
     wildlife: Object.fromEntries(ANIMALS.map((animal) => [animal.field, []])),
     cartRoutes: [],
@@ -1058,9 +1130,12 @@ function blankCourse(
 }
 
 function reindexHoles() {
+  const targetRun = state.course.mode === "target";
   state.course.holes.forEach((hole, i) => {
     hole.index = i + 1;
-    if (/^Hole \d+$/i.test(hole.name || "")) hole.name = `Hole ${i + 1}`;
+    if (/^(Hole|Target) \d+$/i.test(hole.name || "")) {
+      hole.name = `${targetRun ? "Target" : "Hole"} ${i + 1}`;
+    }
   });
 }
 
@@ -1345,18 +1420,28 @@ function updateHoleFields() {
   const environment =
     COURSE_THEMES.find((theme) => theme.id === (state.course.environment || "canadian"))?.label ||
     "Canadian";
-  courseSummaryEl.textContent = `${state.course.name} · ${environment} · ${
-    state.course.holes.length
-  } ${state.course.holes.length === 1 ? "HOLE" : "HOLES"} · PAR ${par}`;
+  courseSummaryEl.textContent =
+    state.course.mode === "target"
+      ? `${state.course.name} · ${environment} · TARGET RUN · ${
+          state.course.holes.length
+        } TARGETS · PAR ${par}`
+      : `${state.course.name} · ${environment} · ${
+          state.course.holes.length
+        } ${state.course.holes.length === 1 ? "HOLE" : "HOLES"} · PAR ${par}`;
 }
 
 function renderHoleTabs() {
   holeTabs.innerHTML = "";
+  const targetRun = state.course.mode === "target";
+  const addButton = document.getElementById("addHoleBtn");
+  if (addButton) addButton.textContent = targetRun ? "+ TARGET" : "+ HOLE";
+  const deleteButton = document.getElementById("deleteHoleBtn");
+  if (deleteButton) deleteButton.textContent = targetRun ? "DELETE TARGET" : "DELETE HOLE";
   state.course.holes.forEach((hole, i) => {
     const b = document.createElement("button");
     b.className = `hole-tab${i === state.holeIndex ? " on" : ""}`;
     b.textContent = `${i + 1} · ${hole.name}`;
-    b.title = `Hole ${i + 1} · ${hole.name} · Par ${hole.par}`;
+    b.title = `${targetRun ? "Target" : "Hole"} ${i + 1} · ${hole.name} · Par ${hole.par}`;
     b.addEventListener("click", () => selectHole(i));
     holeTabs.appendChild(b);
   });
@@ -1364,6 +1449,30 @@ function renderHoleTabs() {
 
 function renderStats() {
   const hole = currentHole();
+  if (state.course.mode === "target") {
+    const totalPar = state.course.holes.reduce(
+      (sum, h) => sum + (Number(h.par) || 0),
+      0
+    );
+    const groundTargets = (hole.bonusTargets || []).filter(
+      (t) => t.type === "ground"
+    );
+    const stats = [
+      ["TYPE", "TARGET RUN"],
+      ["TARGET", `${state.holeIndex + 1} / ${state.course.holes.length}`],
+      ["PAR", hole.par],
+      ["TARGET RINGS", groundTargets.length],
+      ["TREES", hole.trees.length],
+      ["TOTAL PAR", totalPar],
+    ];
+    holeStats.innerHTML = stats
+      .map(
+        ([label, value]) =>
+          `<div class="ed-stat"><span>${label}</span><b>${value}</b></div>`
+      )
+      .join("");
+    return;
+  }
   const segments = holeFairwaySegments(hole);
   const paintedFairways = (hole.fairwayPolys || []).length;
   const length = holeHasFrame(hole)
@@ -1575,6 +1684,53 @@ function validateCourse() {
     p.y >= db.minY &&
     p.y <= db.maxY;
   const holesWithoutChallenges = [];
+
+  if (state.course.mode === "target") {
+    const holes = state.course.holes;
+    if (!holes.length) {
+      add("error", "The target run has no target tabs.");
+      return issues;
+    }
+    holes.forEach((hole, hi) => {
+      const tag = `Target ${hi + 1}`;
+      if (!holeHasTee(hole)) add("error", `${tag}: tee is missing.`);
+      else if (!inWorld(hole.tee)) add("error", `${tag}: tee is outside the course.`);
+      if (!holeHasPin(hole)) {
+        add("warn", `${tag}: pin is missing; the tab cannot frame itself.`);
+      }
+      const rings = (hole.bonusTargets || []).filter(
+        (t) => t.type === "ground"
+      );
+      if (!rings.length) {
+        add(
+          "error",
+          `${tag}: no ground TARGET ring. Place one with the TARGET tool.`
+        );
+      } else if (rings.length > 1) {
+        add(
+          "warn",
+          `${tag}: ${rings.length} ground targets. The first one is used.`
+        );
+      }
+      rings.forEach((ring, ri) => {
+        if (!inWorld(ring)) {
+          add("error", `${tag}: target ${ri + 1} is outside the course.`);
+          return;
+        }
+        if (holeSurfaceAt(hole, ring.x, ring.y) === "water") {
+          add(
+            "warn",
+            `${tag}: target ${ri + 1} is in water — the ball will splash.`
+          );
+        }
+        if (Number(ring.radius) < 20) {
+          add("warn", `${tag}: target ${ri + 1} is very small.`);
+        }
+      });
+      if (!Number(hole.par)) add("warn", `${tag}: par is zero.`);
+    });
+    return issues;
+  }
 
   state.course.holes.forEach((hole, hi) => {
     const tag = `Hole ${hi + 1}`;
@@ -2309,7 +2465,8 @@ function renderToolSettings() {
       break;
     }
     case "target":
-      html += `
+      if (state.course.mode !== "target") {
+        html += `
         <label class="ed-setting">
           <span class="ed-set-head">TYPE</span>
           <select data-setting="targetType">
@@ -2317,8 +2474,12 @@ function renderToolSettings() {
             <option value="ground" ${s.targetType === "ground" ? "selected" : ""}>Ground ring</option>
           </select>
         </label>`;
-      html += range("RADIUS", "targetRadius", 16, 90, 2);
-      html += `
+      } else {
+        html += `<div class="ed-tip">Target-run rings are always ground targets. The ball must come to rest inside the ring.</div>`;
+      }
+      html += range("RADIUS", "targetRadius", 16, 140, 2);
+      if (state.course.mode !== "target") {
+        html += `
         <label class="ed-setting">
           <span class="ed-set-head">BONUS</span>
           <select data-setting="targetValue">
@@ -2331,9 +2492,14 @@ function renderToolSettings() {
           <input type="text" data-setting="targetLabel" value="${String(
             s.targetLabel
           ).replace(/"/g, "&quot;")}" />
-        </label>
-        <div class="ed-setting"><button data-action="clear-targets">CLEAR TARGETS</button></div>
-        <div class="ed-tip">Water targets must sit inside a pond. A safe drop point is generated on the nearest bank when placed.</div>`;
+        </label>`;
+      }
+      html += `<div class="ed-setting"><button data-action="clear-targets">CLEAR TARGETS</button></div>
+        <div class="ed-tip">${
+          state.course.mode === "target"
+            ? "Place one ground target per target tab. The ball must come to rest inside it. Radius is the target size."
+            : "Water targets must sit inside a pond. A safe drop point is generated on the nearest bank when placed."
+        }</div>`;
       break;
     case "route": {
       const draft = state.routeDraft;
@@ -2438,6 +2604,18 @@ function renderSetupCounts() {
 }
 
 function updateSetupNote() {
+  const target = setupModeSelect?.value === "target";
+  if (setupHolesField) setupHolesField.style.display = target ? "none" : "";
+  if (target) {
+    const editing =
+      courseDialogMode === "edit" && state.course.mode === "target";
+    const holeCount = editing ? state.course.holes.length : 3;
+    const par = editing
+      ? state.course.holes.reduce((sum, hole) => sum + (Number(hole.par) || 0), 0)
+      : 3;
+    setupNoteEl.textContent = `Target run · ${holeCount} target tabs · par ${par}. Each tab gets one ground TARGET ring. A starter chain is included so you can test the player immediately.`;
+    return;
+  }
   const current = state.course.holes.length;
   const par = setupParTotal(setupHoleCount);
   let text = `${setupHoleCount} holes · par ${par}.`;
@@ -2466,10 +2644,14 @@ function openCourseDialog(mode) {
     setupIdTouched = false;
     setupHoleCount = 9;
     setupEnvironmentSelect.value = "canadian";
+    if (setupModeSelect) {
+      setupModeSelect.value = "round";
+      setupModeSelect.disabled = false;
+    }
     courseDialogModeEl.textContent = "NEW COURSE";
     courseDialogTitleEl.textContent = "Build a full course";
     courseDialogHelpEl.textContent =
-      "Choose the course theme and how many holes it has. Holes start empty on a blank canvas. Creating a new course replaces the current editor contents.";
+      "Choose a stroke-play round or a target run, then set the course theme. Stroke-play holes start empty; target runs start with three target tabs, each with a tee and one ground TARGET ring.";
     courseConfirmBtn.textContent = "CREATE COURSE";
   } else {
     setupNameInput.value = state.course.name;
@@ -2477,10 +2659,15 @@ function openCourseDialog(mode) {
     setupIdTouched = true;
     setupHoleCount = setupExistingCount;
     setupEnvironmentSelect.value = state.course.environment || "canadian";
+    if (setupModeSelect) {
+      setupModeSelect.value =
+        state.course.mode === "target" ? "target" : "round";
+      setupModeSelect.disabled = true;
+    }
     courseDialogModeEl.textContent = "COURSE SETUP";
     courseDialogTitleEl.textContent = "Course details";
     courseDialogHelpEl.textContent =
-      "Rename the course, change its theme or change the hole count. Increasing adds fresh empty holes; decreasing removes the extra holes.";
+      "Rename the course, change its theme or resize a stroke-play round. The course type is fixed after creation.";
     courseConfirmBtn.textContent = "SAVE SETUP";
   }
   renderSetupCounts();
@@ -2498,10 +2685,18 @@ function submitCourseDialog(event) {
   const name = setupNameInput.value.trim() || "My Course";
   const id = slugify(setupIdInput.value || name);
   const environment = setupEnvironmentSelect?.value || "canadian";
-  let count = setupHoleCount;
+  const targetMode = setupModeSelect?.value === "target";
+  let count = targetMode
+    ? courseDialogMode === "edit" && state.course.mode === "target"
+      ? state.course.holes.length
+      : 3
+    : setupHoleCount;
 
   if (courseDialogMode === "new") {
-    state.course = blankCourse(count, name, id, environment);
+    state.course = targetMode
+      ? blankTargetCourse(name, id, environment)
+      : blankCourse(count, name, id, environment);
+    if (targetMode) state.settings.targetRadius = 70;
     state.holeIndex = 0;
     state.fairwayDraft = null;
     state.routeDraft = null;
@@ -2518,10 +2713,15 @@ function submitCourseDialog(event) {
     refreshUI();
     fitView();
     closeCourseDialog();
-    setStatus(`Created ${name} · ${count} holes`);
+    setStatus(
+      targetMode
+        ? `Created ${name} · ${state.course.holes.length} target tabs`
+        : `Created ${name} · ${count} holes`
+    );
     return;
   }
 
+  if (state.course.mode === "target") count = state.course.holes.length;
   const current = state.course.holes.length;
   if (
     count < current &&
@@ -3144,7 +3344,12 @@ function nextBonusId(hole) {
 
 function addBonusTarget(p) {
   const hole = currentHole();
-  const type = state.settings.targetType === "ground" ? "ground" : "water";
+  const type =
+    state.course.mode === "target"
+      ? "ground"
+      : state.settings.targetType === "ground"
+      ? "ground"
+      : "water";
   const surface = holeSurfaceAt(hole, p.x, p.y);
   const target = {
     id: nextBonusId(hole),
@@ -3587,11 +3792,16 @@ function drawHoleDesign(hole, active) {
   for (const fw of [hole.fairway, ...(hole.extraFairways || []).map((f) => f.points)]) {
     if (!fw || fw.length < 2) continue;
     const samples = designFairwaySamples(fw);
+    ctx.fillStyle = active ? "#4c8a37" : "#3c6b33";
+    ctx.fill(circleUnionPath(samples, C.FAIRWAY_FRINGE));
     ctx.fillStyle = active ? "#5fa742" : "#477f39";
     ctx.fill(circleUnionPath(samples, 0));
   }
   for (const poly of hole.fairwayPolys || []) {
     traceWorldPoly(poly);
+    ctx.strokeStyle = active ? "#4c8a37" : "#3c6b33";
+    ctx.lineWidth = C.FAIRWAY_POLY_FRINGE * 2;
+    ctx.stroke();
     ctx.fillStyle = active ? "#5fa742" : "#477f39";
     ctx.fill();
   }
@@ -3625,7 +3835,7 @@ function drawHoleDesign(hole, active) {
     ctx.rotate(green.rot || 0);
     ctx.fillStyle = active ? "#82ca5c" : "#619b4a";
     ctx.beginPath();
-    ctx.ellipse(0, 0, green.rx + 8, green.ry + 8, 0, 0, TAU);
+    ctx.ellipse(0, 0, green.rx + C.GREEN_COLLAR, green.ry + C.GREEN_COLLAR, 0, 0, TAU);
     ctx.fill();
     ctx.fillStyle = active ? "#8edb68" : "#6aab50";
     ctx.beginPath();
@@ -3635,6 +3845,9 @@ function drawHoleDesign(hole, active) {
   }
   for (const poly of hole.greenPolys || []) {
     traceWorldPoly(poly);
+    ctx.strokeStyle = active ? "#82ca5c" : "#619b4a";
+    ctx.lineWidth = C.GREEN_POLY_COLLAR * 2;
+    ctx.stroke();
     ctx.fillStyle = active ? "#82ca5c" : "#619b4a";
     ctx.fill();
     ctx.save();
@@ -3664,6 +3877,8 @@ function drawHoleDesign(hole, active) {
   // Trees.
   for (const t of hole.trees) drawTreeWorld(t);
 
+  // Target-run scoring rings. These are the only success zones; the terrain
+  // underneath is ordinary fairway/green/ocean and can let the ball roll off.
   // Tee box and pin marker.
   const tee = hole.tee;
   if (holeHasTee(hole)) {
@@ -4139,7 +4354,9 @@ function drawOverlays() {
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
     ctx.fillText(
-      `−${Math.abs(t.value)} ${String(t.label || "RING").toUpperCase()}`,
+      state.course.mode === "target"
+        ? String(t.label || "TARGET").toUpperCase()
+        : `−${Math.abs(t.value)} ${String(t.label || "RING").toUpperCase()}`,
       s.x,
       s.y - 22
     );
@@ -4517,13 +4734,16 @@ let panRaf = 0;
 let panLast = 0;
 
 function keyboardPanBlocked() {
-  return [
-    courseDialog,
-    libraryDialog,
-    publishDialog,
-    analysisDialog,
-    previewOverlay,
-  ].some((el) => el && !el.classList.contains("hidden"));
+  return (
+    !!document.querySelector(".ed-player") ||
+    [
+      courseDialog,
+      libraryDialog,
+      publishDialog,
+      analysisDialog,
+      previewOverlay,
+    ].some((el) => el && !el.classList.contains("hidden"))
+  );
 }
 
 function panDirection() {
@@ -5296,9 +5516,10 @@ function samplePolyline(points, step = 22) {
 }
 
 function cutHole(hole, index, allHoles, course) {
+  const targetRun = course?.mode === "target";
   if (
     !holeHasFrame(hole) ||
-    (!holeHasGreen(hole) && !(hole.greenPolys || []).length)
+    (!targetRun && !holeHasGreen(hole) && !(hole.greenPolys || []).length)
   ) {
     throw new Error(`Hole ${index + 1} is incomplete.`);
   }
@@ -5524,6 +5745,7 @@ function roundFairway(points) {
 }
 
 function courseExportBlocker() {
+  if (state.course.mode === "target") return "";
   for (let i = 0; i < state.course.holes.length; i++) {
     const hole = state.course.holes[i];
     if (!holeHasTee(hole)) return `Hole ${i + 1} has no tee.`;
@@ -5539,6 +5761,10 @@ function courseExportBlocker() {
 }
 
 function runCourseAnalysis() {
+  if (state.course.mode === "target") {
+    setStatus("Stableford analysis is for stroke-play courses", "warn");
+    return null;
+  }
   analysisResult = analyseCourse(state.course.holes, {});
   renderCourseAnalysis();
   return analysisResult;
@@ -5620,6 +5846,10 @@ function renderCourseAnalysis() {
 }
 
 function openAnalysisDialog() {
+  if (state.course.mode === "target") {
+    setStatus("Stableford analysis is for stroke-play courses", "warn");
+    return;
+  }
   runCourseAnalysis();
   analysisDialog.classList.remove("hidden");
 }
@@ -5730,8 +5960,26 @@ function renderCourseMapImage(selectedBounds = null) {
 }
 
 function exportCourse() {
-  const blocker = courseExportBlocker();
-  if (blocker) throw new Error(blocker);
+  const targetMode = state.course.mode === "target";
+  if (!targetMode) {
+    const blocker = courseExportBlocker();
+    if (blocker) throw new Error(blocker);
+  }
+  if (targetMode) {
+    const built = buildTargetCourse();
+    return {
+      version: 2,
+      id: slugify(built.id),
+      name: built.name || "Target Run",
+      theme: built.theme || "verdant",
+      environment: built.environment || "canadian",
+      mode: "target",
+      targetRun: built.targetRun,
+      mapImage: state.exportMapImage || renderCourseMapImage(),
+      analysis: null,
+      holes: built.holes,
+    };
+  }
   const analysis = analyseCourse(state.course.holes, {});
   return {
     version: 2,
@@ -5739,8 +5987,12 @@ function exportCourse() {
     name: state.course.name || "My Course",
     theme: state.course.theme || "verdant",
     environment: state.course.environment || "canadian",
+    mode: targetMode ? "target" : "round",
+    targetRun: targetMode
+      ? JSON.parse(JSON.stringify(state.course.targetRun || {}))
+      : null,
     mapImage: state.exportMapImage || renderCourseMapImage(),
-    analysis: {
+    analysis: targetMode ? null : {
       version: analysis.version,
       holes: analysis.holes,
       par: analysis.par,
@@ -5861,6 +6113,8 @@ function serialiseCourse() {
       name: state.course.name || "My Course",
       theme: state.course.theme || "verdant",
       environment: state.course.environment || "canadian",
+      mode: state.course.mode === "target" ? "target" : "round",
+      targetRun: state.course.targetRun || null,
       design: { ...designBounds() },
       wildlife: state.course.wildlife,
       cartRoutes: state.course.cartRoutes,
@@ -6414,10 +6668,191 @@ function previewBlocker(hole) {
   if (!hole) return "There is no hole to preview.";
   if (!holeHasTee(hole)) return `Hole ${number} has no tee yet.`;
   if (!holeHasPin(hole)) return `Hole ${number} has no pin yet.`;
+  if (state.course.mode === "target") {
+    return "";
+  }
   if (!holeHasGreen(hole) && !(hole.greenPolys || []).length) {
     return `Hole ${number} needs a green before it can be previewed.`;
   }
   return "";
+}
+
+// Target courses are one shared world. Each target tab contributes its
+// terrain, trees and first ground TARGET ring. The combined hole is what the
+// player sees, so a lie on one target carries naturally to the next.
+function buildTargetCourse() {
+  const holes = state.course.holes;
+  if (!holes.length || !holeHasTee(holes[0])) {
+    throw new Error("Target 1 needs a tee before the run can be built.");
+  }
+  const db = designBounds();
+  const pad = 140;
+  const offsetX = -db.minX + pad;
+  const offsetY = -db.minY + pad;
+  const worldW = Math.max(C.BASE_WORLD.w, db.maxX - db.minX + pad * 2);
+  const worldH = Math.max(C.BASE_WORLD.h, db.maxY - db.minY + pad * 2);
+  const movePoint = (p) => ({ ...p, x: p.x + offsetX, y: p.y + offsetY });
+  const movePoly = (poly) =>
+    poly.map(([x, y]) => [x + offsetX, y + offsetY]);
+  const movePoints = (points) => points.map(movePoint);
+
+  const combined = {
+    index: 1,
+    name: state.course.name || "Target Run",
+    par: holes.reduce((sum, hole) => sum + (Number(hole.par) || 0), 0),
+    world: { w: Math.round(worldW), h: Math.round(worldH) },
+    tee: movePoint(holes[0].tee),
+    pin: null,
+    green: null,
+    fairway: [],
+    fairwayPolys: [],
+    greenPolys: [],
+    waterPolys: [],
+    oceanPolys: [],
+    sandPolys: [],
+    bunkers: [],
+    pond: [],
+    trees: [],
+    props: [],
+    roads: [],
+    flowerBeds: [],
+    bonusTargets: [],
+    extraFairways: [],
+    extraGreens: [],
+    extraTees: [],
+    challenges: [],
+    cartRoutes: [],
+  };
+  const sequence = [];
+
+  holes.forEach((hole, hi) => {
+    for (const poly of hole.fairwayPolys || []) {
+      combined.fairwayPolys.push(movePoly(poly));
+    }
+    if (hole.green) combined.extraGreens.push(movePoint(hole.green));
+    for (const green of hole.extraGreens || []) {
+      combined.extraGreens.push(movePoint(green));
+    }
+    for (const poly of hole.greenPolys || []) {
+      combined.greenPolys.push(movePoly(poly));
+    }
+    for (const poly of hole.waterPolys || []) {
+      combined.waterPolys.push(movePoly(poly));
+    }
+    for (const poly of hole.oceanPolys || []) {
+      combined.oceanPolys.push(movePoly(poly));
+    }
+    for (const poly of hole.sandPolys || []) {
+      combined.sandPolys.push(movePoly(poly));
+    }
+    if (hole.fairway && hole.fairway.length > 1) {
+      combined.extraFairways.push({
+        points: hole.fairway.map((p) => ({ ...movePoint(p), w: p.w })),
+        hole: hi + 1,
+      });
+    }
+    for (const extra of hole.extraFairways || []) {
+      combined.extraFairways.push({
+        points: (extra.points || []).map((p) => ({
+          ...movePoint(p),
+          w: p.w,
+        })),
+        hole: extra.hole || hi + 1,
+      });
+    }
+    for (const tee of hole.extraTees || []) {
+      combined.extraTees.push(movePoint(tee));
+    }
+    if (hi > 0 && holeHasTee(hole)) {
+      combined.extraTees.push(movePoint(hole.tee));
+    }
+    combined.trees.push(...(hole.trees || []).map(movePoint));
+    combined.props.push(...(hole.props || []).map(movePoint));
+    combined.roads.push(
+      ...(hole.roads || []).map((road) => ({
+        ...road,
+        points: movePoints(road.points || []),
+      }))
+    );
+    combined.flowerBeds.push(...(hole.flowerBeds || []).map(movePoint));
+    for (const target of hole.bonusTargets || []) {
+      const moved = movePoint(target);
+      combined.bonusTargets.push(moved);
+      if (moved.type === "ground" && !sequence.some((s) => s.hole === hi + 1)) {
+        sequence.push({
+          x: moved.x,
+          y: moved.y,
+          radius: Math.max(10, Number(moved.radius) || 34),
+          par: Math.max(1, Number(hole.par) || 1),
+          hole: hi + 1,
+        });
+      }
+    }
+  });
+
+  combined.par = sequence.reduce((sum, target) => sum + target.par, 0);
+  const lastTarget = sequence[sequence.length - 1];
+  const lastHole = holes[holes.length - 1];
+  combined.pin = lastTarget
+    ? { x: lastTarget.x, y: lastTarget.y }
+    : holeHasPin(lastHole)
+    ? movePoint(lastHole.pin)
+    : combined.tee;
+
+  return {
+    ...JSON.parse(JSON.stringify(state.course)),
+    mode: "target",
+    targetRun: {
+      ...(state.course.targetRun || {}),
+      balls: Math.max(1, Number(state.course.targetRun?.balls) || 30),
+      sequence,
+    },
+    holes: [combined],
+  };
+}
+
+// The editor-side target player is a playtest harness, not the main game.
+function playableTargetCourse() {
+  if (state.course.mode === "target" && state.course.holes.length) {
+    try {
+      const built = buildTargetCourse();
+      if (built.targetRun.sequence.length) return built;
+    } catch (err) {
+      console.warn("Target run could not be built; using the sample", err);
+    }
+  }
+  return sampleTargetRun();
+}
+
+let targetPlayerSession = null;
+
+function playTargetRun() {
+  if (targetPlayerSession) return;
+  try {
+    hidePreview();
+    const playCourse = playableTargetCourse();
+    setStatus(
+      playCourse.id === "editor-target-sample"
+        ? "No target run here — starting the built-in sample run"
+        : "Starting target run…"
+    );
+    targetPlayerSession = startTargetPlayer({
+      course: playCourse,
+      onExit: () => {
+        targetPlayerSession = null;
+        setStatus(
+          playCourse.id === "editor-island-sample"
+            ? "Sample target run closed"
+            : "Target run closed"
+        );
+        requestRender();
+      },
+    });
+  } catch (err) {
+    console.error(err);
+    targetPlayerSession = null;
+    setStatus(`Could not start target run: ${err.message}`, "error");
+  }
 }
 
 let previewSession = null;
@@ -6453,6 +6888,8 @@ function showPreview() {
         hole: { ...cut, index: index + 1 },
         theme: state.course.theme || "verdant",
         environment: state.course.environment || "canadian",
+        mode: state.course.mode || "round",
+        targetRun: state.course.targetRun || null,
       });
       setStatus(`Previewing hole ${index + 1} — ${state.course.theme || "verdant"} theme`);
     } catch (err) {
@@ -6939,6 +7376,7 @@ savedCourseList.addEventListener("click", (event) => {
   const del = event.target.closest("[data-del-course]");
   if (del) deleteSavedCourse(Number(del.dataset.delCourse));
 });
+$("playRunBtn").addEventListener("click", playTargetRun);
 $("previewBtn").addEventListener("click", showPreview);
 $("previewReloadBtn").addEventListener("click", showPreview);
 $("previewCloseBtn").addEventListener("click", hidePreview);
@@ -6960,6 +7398,13 @@ setupIdInput.addEventListener("input", () => {
 });
 setupIdInput.addEventListener("blur", () => {
   setupIdInput.value = slugify(setupIdInput.value || setupNameInput.value);
+});
+setupModeSelect?.addEventListener("change", () => {
+  if (setupModeSelect.value === "target" && setupEnvironmentSelect.value === "canadian") {
+    setupEnvironmentSelect.value = "coastal";
+  }
+  renderSetupCounts();
+  updateSetupNote();
 });
 setupCountsEl.addEventListener("click", (event) => {
   const button = event.target.closest("[data-count]");
@@ -6992,6 +7437,9 @@ $("zoomOutBtn").addEventListener("click", () =>
 
 $("addHoleBtn").addEventListener("click", () => {
   const hole = defaultHole(state.course.holes.length);
+  if (state.course.mode === "target") {
+    hole.name = `Target ${state.course.holes.length + 1}`;
+  }
   state.course.holes.push(hole);
   const e = holeExtent(hole);
   if (e) ensureDesignSpace(e.minX, e.minY, e.maxX, e.maxY);
@@ -7141,6 +7589,7 @@ async function boot() {
   resize();
   const restored = await restoreAutosave();
   updateSaveState();
+  initEditorTour();
   requestAnimationFrame(() => {
     if (!state.fitted) {
       fitView();

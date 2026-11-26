@@ -2,6 +2,10 @@
 // The result is intentionally rich: layered grass, mown stripes, sand grain,
 // shoreline detail and long soft shadows — all without image assets.
 import {
+  FAIRWAY_FRINGE,
+  FAIRWAY_POLY_FRINGE,
+  GREEN_COLLAR,
+  GREEN_POLY_COLLAR,
   HOLE,
   POND_BOUNDS,
   POND_POLY,
@@ -387,7 +391,7 @@ function paintGreen(ctx, green, rng) {
   // fringe / collar
   ctx.fillStyle = "#6cb548";
   ctx.beginPath();
-  ctx.ellipse(0, 0, green.rx + 15, green.ry + 15, 0, 0, TAU);
+  ctx.ellipse(0, 0, green.rx + GREEN_COLLAR, green.ry + GREEN_COLLAR, 0, 0, TAU);
   ctx.fill();
   // putting surface
   const gg = ctx.createRadialGradient(-green.rx * 0.35, -green.ry * 0.4, 10, 0, 0, green.rx + 40);
@@ -474,6 +478,9 @@ function paintTeeBox(ctx, tee) {
   ctx.restore();
 }
 
+// ---------------------------------------------------------------- island runs
+// Target runs paint the whole world as water first, then raise each pad as a
+// small cliff-edged island. Trees are drawn by the game/player on top.
 export function paintCourse(themeId = "verdant", options = {}) {
   // 1.25 keeps long holes under the common 4096 px GPU texture limit while
   // saving ~20% of the painted texture memory. The camera zooms up to 2.4x,
@@ -495,44 +502,44 @@ export function paintCourse(themeId = "verdant", options = {}) {
   const pondPath = makePondPath();
 
   // ---------- ROUGH BASE ----------
-  ctx.fillStyle = "#4a8b3a";
-  ctx.fillRect(0, 0, WORLD.w, WORLD.h);
+    ctx.fillStyle = "#4a8b3a";
+    ctx.fillRect(0, 0, WORLD.w, WORLD.h);
 
-  // Big soft colour mottles.
-  for (let i = 0; i < 65; i++) {
-    const x = rr(rng, -100, WORLD.w + 100);
-    const y = rr(rng, -100, WORLD.h + 100);
-    const r = rr(rng, 120, 460);
-    const g = ctx.createRadialGradient(x, y, 0, x, y, r);
-    const light = rng() < 0.5;
-    g.addColorStop(0, light ? "rgba(142,196,92,0.18)" : "rgba(24,68,26,0.16)");
-    g.addColorStop(1, "rgba(0,0,0,0)");
-    ctx.fillStyle = g;
-    ctx.fillRect(x - r, y - r, r * 2, r * 2);
-  }
-
-  // Grass blade strokes.
-  const bladeColours = [
-    "rgba(142,196,96,0.30)",
-    "rgba(34,84,30,0.34)",
-    "rgba(176,212,116,0.22)",
-    "rgba(88,146,58,0.30)",
-  ];
-  for (let c = 0; c < bladeColours.length; c++) {
-    ctx.strokeStyle = bladeColours[c];
-    ctx.lineWidth = 1.1;
-    ctx.beginPath();
-    const count = 3600;
-    for (let i = 0; i < count; i++) {
-      const x = rng() * WORLD.w;
-      const y = rng() * WORLD.h;
-      const len = rr(rng, 2.5, 8);
-      const a = -Math.PI / 2 + rr(rng, -0.7, 0.7);
-      ctx.moveTo(x, y);
-      ctx.lineTo(x + Math.cos(a) * len, y + Math.sin(a) * len);
+    // Big soft colour mottles.
+    for (let i = 0; i < 65; i++) {
+      const x = rr(rng, -100, WORLD.w + 100);
+      const y = rr(rng, -100, WORLD.h + 100);
+      const r = rr(rng, 120, 460);
+      const g = ctx.createRadialGradient(x, y, 0, x, y, r);
+      const light = rng() < 0.5;
+      g.addColorStop(0, light ? "rgba(142,196,92,0.18)" : "rgba(24,68,26,0.16)");
+      g.addColorStop(1, "rgba(0,0,0,0)");
+      ctx.fillStyle = g;
+      ctx.fillRect(x - r, y - r, r * 2, r * 2);
     }
-    ctx.stroke();
-  }
+
+    // Grass blade strokes.
+    const bladeColours = [
+      "rgba(142,196,96,0.30)",
+      "rgba(34,84,30,0.34)",
+      "rgba(176,212,116,0.22)",
+      "rgba(88,146,58,0.30)",
+    ];
+    for (let c = 0; c < bladeColours.length; c++) {
+      ctx.strokeStyle = bladeColours[c];
+      ctx.lineWidth = 1.1;
+      ctx.beginPath();
+      const count = 3600;
+      for (let i = 0; i < count; i++) {
+        const x = rng() * WORLD.w;
+        const y = rng() * WORLD.h;
+        const len = rr(rng, 2.5, 8);
+        const a = -Math.PI / 2 + rr(rng, -0.7, 0.7);
+        ctx.moveTo(x, y);
+        ctx.lineTo(x + Math.cos(a) * len, y + Math.sin(a) * len);
+      }
+      ctx.stroke();
+    }
 
   // Finer noise overlay. A single stretched texture instead of a repeating
   // tile: a small tile shows up as a grid when the course is downscaled for
@@ -571,7 +578,7 @@ export function paintCourse(themeId = "verdant", options = {}) {
   // ---------- FAIRWAYS ----------
   for (const track of FAIRWAY_TRACKS) {
     if (!track.samples.length) continue;
-    const fringePath = circleUnionPath(track.samples, 9);
+    const fringePath = circleUnionPath(track.samples, FAIRWAY_FRINGE);
     const fairwayPath = circleUnionPath(track.samples, 0);
     ctx.fillStyle = "#4c8a37";
     ctx.fill(fringePath);
@@ -615,7 +622,7 @@ export function paintCourse(themeId = "verdant", options = {}) {
     for (let i = 1; i < poly.length; i++) path.lineTo(poly[i][0], poly[i][1]);
     path.closePath();
     ctx.strokeStyle = "#4c8a37";
-    ctx.lineWidth = 12;
+    ctx.lineWidth = FAIRWAY_POLY_FRINGE * 2;
     ctx.stroke(path);
     ctx.fillStyle = "#5fa742";
     ctx.fill(path);
@@ -648,7 +655,7 @@ export function paintCourse(themeId = "verdant", options = {}) {
     for (let i = 1; i < poly.length; i++) path.lineTo(poly[i][0], poly[i][1]);
     path.closePath();
     ctx.strokeStyle = "#6cb548";
-    ctx.lineWidth = 15;
+    ctx.lineWidth = GREEN_POLY_COLLAR * 2;
     ctx.stroke(path);
     ctx.fillStyle = "#79c455";
     ctx.fill(path);

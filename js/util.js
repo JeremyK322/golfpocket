@@ -128,6 +128,27 @@ export function distanceToPolyline(x, y, pts) {
   return best;
 }
 
+// Closest distance from a point to a closed polygon of [x,y] points.
+export function distanceToPoly(x, y, poly) {
+  const n = poly.length;
+  if (n < 2) return Infinity;
+  let best = Infinity;
+  for (let i = 0; i < n; i++) {
+    const a = poly[i];
+    const b = poly[(i + 1) % n];
+    const dx = b[0] - a[0];
+    const dy = b[1] - a[1];
+    const len2 = dx * dx + dy * dy || 1;
+    let t = ((x - a[0]) * dx + (y - a[1]) * dy) / len2;
+    t = clamp(t, 0, 1);
+    const px = a[0] + dx * t;
+    const py = a[1] + dy * t;
+    const d = Math.hypot(x - px, y - py);
+    if (d < best) best = d;
+  }
+  return best;
+}
+
 // Build a Path2D made of overlapping circles (used for organic fairway fills).
 export function circleUnionPath(samples, extra = 0) {
   const path = new Path2D();
