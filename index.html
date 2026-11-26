@@ -35,7 +35,9 @@
           <button id="importBtn" class="small" title="Open a .glfppart or .glfpkt file (Ctrl/Cmd+O)">OPEN FILE</button>
           <input id="importFile" type="file" accept=".glfppart,.glfpkt,.json,application/json,application/x-golfpocket-part,application/x-golfpocket-course" hidden />
           <input id="referenceFile" type="file" accept="image/png,image/jpeg,image/webp,image/gif" hidden />
+          <button id="tourBtn" class="small" title="Play the course-building tutorial">TOUR</button>
           <button id="analyseBtn" class="small">ANALYSE</button>
+          <button id="playRunBtn" class="small" title="Play the target run in the editor">TEST RUN</button>
           <button id="previewBtn" class="small">PREVIEW</button>
           <button id="exportBtn" class="primary small">EXPORT COURSE</button>
           <div class="ed-uiscale" title="Editor text and icon size">
@@ -154,6 +156,37 @@
       </aside>
     </div>
 
+    <div id="editorTour" class="ed-tour hidden" role="dialog" aria-modal="true" aria-labelledby="tourTitle">
+      <div class="ed-tour-shell">
+        <div class="ed-tour-head">
+          <div class="ed-tour-kicker">COURSE EDITOR <span>QUICK TOUR</span></div>
+          <button id="tourSkipBtn" class="small" type="button">SKIP TOUR</button>
+        </div>
+        <div class="ed-tour-stage">
+          <img id="tourImage" alt="" decoding="async" />
+          <div id="tourShade" class="ed-tour-shade hidden">
+            <span class="ed-tour-shade-top"></span>
+            <span class="ed-tour-shade-bottom"></span>
+            <span class="ed-tour-shade-left"></span>
+            <span class="ed-tour-shade-right"></span>
+          </div>
+          <div id="tourSpot" class="ed-tour-spot hidden"></div>
+        </div>
+        <div class="ed-tour-card">
+          <div class="ed-tour-meta">
+            <span id="tourStep">STEP 1 OF 10</span>
+            <span id="tourDots" class="ed-tour-dots"></span>
+          </div>
+          <h2 id="tourTitle"></h2>
+          <p id="tourBody"></p>
+          <div class="ed-tour-actions">
+            <button id="tourBackBtn" class="small" type="button">BACK</button>
+            <button id="tourNextBtn" class="small primary" type="button">NEXT</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <div id="previewOverlay" class="ed-preview hidden">
       <div class="ed-preview-bar">
         <div class="ed-preview-title">COURSE PREVIEW <span id="previewTitleHole">HOLE 1 · AS PLAYED</span></div>
@@ -182,7 +215,14 @@
           <span>COURSE ID</span>
           <input id="setupId" type="text" value="my-course" autocomplete="off" />
         </label>
-        <div class="ed-dialog-field">
+        <label class="ed-dialog-field">
+          <span>COURSE TYPE</span>
+          <select id="setupMode">
+            <option value="round">Stroke play round</option>
+            <option value="target">Target run — island hopping</option>
+          </select>
+        </label>
+        <div class="ed-dialog-field" id="setupHolesField">
           <span>HOLES</span>
           <div id="setupCounts" class="ed-counts"></div>
         </div>
